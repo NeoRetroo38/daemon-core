@@ -1,0 +1,4 @@
+module DaemonNativeCore {
+    header "daemon_native.h"
+    export *
+}

@@ -1,5 +1,9 @@
 # Build output and binaries
 build/
+.build/
+.swiftpm/
+.DS_Store
+artifacts/
 *.exe
 *.o
 *.obj
