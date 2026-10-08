@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "com.scenarys.neo-cube",
+  "version": "0.1.0",
+  "abiVersion": 1,
+  "visibility": "private",
+  "artifacts": {
+    "windows-x64": [
+      "neo-cube.dll",
+      "neo-cube.dll.a"
+    ],
+    "macos": [
+      "libneo_cube.a",
+      "libneo_cube.dylib"
+    ],
+    "linux": [
+      "libneo_cube.a",
+      "libneo_cube.so"
+    ]
+  },
+  "publicHeader": "include/scenarys/neo_cube.h"
+}
