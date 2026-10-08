@@ -4,6 +4,7 @@
 #include "daemon/trace.hpp"
 #include "platform.hpp"
 #include "process.hpp"
+#include "security_cases.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -105,7 +106,8 @@ void processAndGitTests() {
 
 int main() {
     try {
-        policyTests(); parserTests(); traceAndJsonTests(); processAndGitTests();
+        policyTests(); daemonx::tests::commandPolicyCases(); daemonx::tests::urlRedactionCases(); daemonx::tests::exposureCases();
+        parserTests(); traceAndJsonTests(); processAndGitTests();
         std::cout << "DAEMON TESTS PASSED: policy, parser, redaction, JSON, C ABI, process bounds and platform behavior\n";
         return 0;
     } catch (const std::exception& error) {

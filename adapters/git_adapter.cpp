@@ -87,12 +87,12 @@ RepositoryState GitAdapter::observe(const std::string& explicitPath, std::stop_t
     repository.path = explicitPath;
     repository.name = displayName(explicitPath);
     if (explicitPath.empty() || explicitPath.find('\0') != std::string::npos) return failure(repository, "EXPLICIT_REPOSITORY_REQUIRED");
-    if (!policy_.evaluate(CommandClass::READ_ONLY).allowed) return failure(repository, "READ_ONLY_DENIED");
-    if (!localProcessesAvailable()) return failure(repository, "LOCAL_PROCESSES_UNAVAILABLE");
-    if (cancellation.stop_requested()) return failure(repository, "CANCELLED");
     const std::vector<std::string> prefix{"--no-pager", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", explicitPath};
     auto arguments = prefix;
     arguments.insert(arguments.end(), {"rev-parse", "--show-toplevel"});
+    if (!policy_.evaluate(StructuredCommand{"/usr/bin/git", arguments}).allowed) return failure(repository, "READ_ONLY_DENIED");
+    if (!localProcessesAvailable()) return failure(repository, "LOCAL_PROCESSES_UNAVAILABLE");
+    if (cancellation.stop_requested()) return failure(repository, "CANCELLED");
     const auto root = detail::runProcess("/usr/bin/git", arguments, options_.timeout, options_.maxOutputBytes, cancellation);
     if (root.unavailable || root.cancelled || root.timedOut || root.outputLimitExceeded) return failure(repository, processError(root));
     if (root.exitCode != 0) return failure(repository, "NOT_A_REPOSITORY");
@@ -103,6 +103,7 @@ RepositoryState GitAdapter::observe(const std::string& explicitPath, std::stop_t
     repository.name = displayName(path);
     arguments = prefix;
     arguments.insert(arguments.end(), {"status", "--porcelain=v2", "--branch", "--untracked-files=normal"});
+    if (!policy_.evaluate(StructuredCommand{"/usr/bin/git", arguments}).allowed) return failure(repository, "READ_ONLY_DENIED");
     const auto status = detail::runProcess("/usr/bin/git", arguments, options_.timeout, options_.maxOutputBytes, cancellation);
     if (status.exitCode != 0 || status.unavailable || status.cancelled || status.timedOut || status.outputLimitExceeded) return failure(repository, processError(status));
     if (!parseGitStatus(status.standardOutput, repository)) return failure(repository, "INVALID_GIT_STATUS");
