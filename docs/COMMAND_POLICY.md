@@ -22,8 +22,10 @@ These structured commands remain Deny with permissive write/network rules:
   dump-keychain.
 - Shell command mode (`bash -c`, combined `-lc`, analogous native shell options)
   and command chains passed as executable strings.
-- Recursive forced deletion with root, traversal, home, wildcard or unresolved
-  variable targets. Even a narrow explicit deletion requires target approval.
+- Recursive forced deletion with root, traversal, tilde/home placeholders,
+  wildcard or unresolved variable targets. Every explicit deletion still
+  requires target approval, including a narrow path. Without filesystem context
+  this evaluator cannot identify resolved home or workspace roots.
 
 Only Git status/rev-parse form the read allowlist. The existing trusted adapter
 configuration (`core.fsmonitor=false`, disabled hooks) is recognized. Unknown
@@ -55,4 +57,5 @@ Offline fixtures inspect argv without executing dangerous commands. They cover
 default/permissive rules, option/refspec/alias variants, benign literal argv,
 synthetic generic URL credentials, malformed/partial/exposed bindings and the
 existing real fixed Git observation. The normal CMake/CTest suite runs in macOS
-with the selected compatible SDK; these tests do not establish Windows, Linux,+iOS/Android builds, remote connectivity or actual motor exposure.
+with the selected compatible SDK; these tests do not establish Windows, Linux,
+iOS or Android builds, remote connectivity or actual motor exposure.
