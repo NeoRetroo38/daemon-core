@@ -27,9 +27,15 @@ was collected, not healthy/idle. `nextAction` is a suggestion, never execution.
 Ahead/behind describe the locally cached upstream ref; no network refresh is
 performed and they are not a claim about the current GitHub HEAD.
 
-`Policy` separates READ_ONLY, WRITE, NETWORK and PRIVILEGED. Default rules allow
-read-only observation and deny writes/network. Privileged actions always require
-explicit approval. This first version does not expose an action executor.
+`Policy` inspects a structured executable and argv and derives READ_ONLY, WRITE,
+NETWORK or PRIVILEGED, with an explicit Allow/RequireApproval/Deny verdict.
+Default rules allow the narrow Git status/rev-parse reads and require approval
+for known writes/network. Permanent command prohibitions are checked before
+rules, including force-push/refspecs, history filters, security overrides and
+shell command strings. GitAdapter supplies both actual fixed commands to this
+gate. The enum-only overload remains a compatibility rule query, not execution
+authority. This version still does not expose an action executor or approval API.
+See [the command policy and evidence contract](COMMAND_POLICY.md).
 
 The POSIX adapter calls `/usr/bin/git` (the trusted system installation) with
 two fixed Git built-ins and separate argv entries,
@@ -47,7 +53,14 @@ PATH directories or download a Git implementation.
 Trace events contain timestamp, actor, machine, repository, branch, commit,
 operation, result and duration. No token/database value/process output is put
 in events. Serialization also redacts common credential assignments, PostgreSQL
-URLs, Bearer values and PEM private keys as defense in depth.
+URLs, generic URL userinfo, Bearer values and PEM private keys as defense in depth.
+
+`check_exposure()` checks supplied binding evidence against the engine's exact
+IPv4 `127.0.0.1:8765` contract. Missing/partial evidence is UNKNOWN; a known
+nonapproved binding is EXPOSED. It collects no listeners/processes, opens no
+connection and changes no service. The current snapshot still leaves services
+unobserved. A SAFE result for a supplied complete inventory does not prove engine
+health, and a non-listening port is explicitly reported as such.
 
 ## C ABI / Apple bridge
 
