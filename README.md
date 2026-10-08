@@ -4,6 +4,26 @@ Repositorio **privado** con todas las herramientas C++ del Cubo de Neo (scenarys
 
 > Es una instantánea de trabajo del 8 de octubre de 2026. El motor público sigue viviendo en [`neos-cube`](https://github.com/NeoRetroo38/neos-cube) y el producto en [`choisys`](https://github.com/NeoRetroo38/choisys); aquí se junta todo en un sitio. No hay inferencia: espera una especificación matemática aprobada (`docs/INFERENCE_ARCHITECTURE.md`).
 
+## Daemon operativo — núcleo nativo
+
+La nueva coordinación operativa vive en `include/daemon`, `src/daemon`, `adapters`,
+`cli` y `apple`. No depende del motor del Cubo ni implementa su matemática.
+Un único núcleo C++20 alimenta el CLI y la app nativa mediante una frontera C.
+Los estados remotos no observados se muestran como desconocidos, nunca como online.
+
+El contenido antiguo de `src/core`, `src/api` y `src/library` se conserva como
+instantánea histórica. **No es una segunda fuente canónica del motor** y no se
+enlaza con el nuevo Daemon. Su consolidación debe revisarse como cambio separado.
+
+- [Arquitectura](docs/ARCHITECTURE.md)
+- [Flujo de datos](docs/DATAFLOW.md)
+- [Integraciones](docs/INTEGRATIONS.md)
+- [Núcleo y política](docs/DAEMON_CORE.md)
+- [App Apple y límites de distribución](docs/APPLE_NATIVE.md)
+
+No se publica un ejecutable porque compile: el dueño debe autorizar cada release
+tras comprobar integridad, firma/notarización cuando corresponda y procedencia.
+
 ## Qué es cada cosa
 
 | Carpeta / fichero | Qué es | Para qué sirve | Estado |
