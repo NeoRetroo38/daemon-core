@@ -7,7 +7,7 @@ public struct AgentMessage: Identifiable, Sendable {
 }
 
 public enum DaemonAgent {
-    public static let name = "Nexo"
+    public static let name = "Daemon"
     public static let identity = "Observador técnico sereno, directo y verificable. Distingue hechos, hipótesis y decisiones; nunca inventa estado, nunca cambia su personalidad y no escribe en los repositorios desde Daemon."
 
     public static func reply(to question: String, repository: RepositorySnapshot, insights: RepositoryInsights) -> String {
@@ -62,7 +62,7 @@ public struct ProjectAgentView: View {
                 }.onChange(of: messages.count) { _, _ in if let id = messages.last?.id { proxy.scrollTo(id) } }
             }
             HStack {
-                TextField("Habla con Nexo sobre este proyecto…", text: $input, axis: .vertical)
+                TextField("Habla con Daemon sobre este proyecto…", text: $input, axis: .vertical)
                     .textFieldStyle(.plain).padding(12).background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 9))
                     .onSubmit(send)
                 Button("Enviar", action: send).disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

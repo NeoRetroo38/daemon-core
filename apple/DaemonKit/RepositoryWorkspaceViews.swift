@@ -27,7 +27,7 @@ public struct RepositoryWorkspaceView: View {
             Group {
                 switch selectedTab {
                 case "Pruebas": diagnostics
-                case "Mapa 3D": RepositorySceneView(insights: insights)
+                case "Mapa 3D": RepositorySceneView(repository: repository, insights: insights)
                 case "Agente": ProjectAgentView(repository: repository, insights: insights)
                 default: metrics
                 }
@@ -173,8 +173,12 @@ private struct FlowLayout: View {
 }
 
 public struct RepositorySceneView: View {
+    public let repository: RepositorySnapshot
     public let insights: RepositoryInsights
-    public init(insights: RepositoryInsights) { self.insights = insights }
+    public init(repository: RepositorySnapshot, insights: RepositoryInsights) {
+        self.repository = repository
+        self.insights = insights
+    }
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
@@ -182,13 +186,16 @@ public struct RepositorySceneView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 8) {
                 Text("CUBO DE MÉTRICAS").font(.caption.monospaced()).foregroundStyle(DaemonPalette.green)
-                Text("Código × Git × Operación").font(.title3.weight(.light)).foregroundStyle(.white)
-                Text("27 celdas · densidad conjunta del repositorio").font(.caption).foregroundStyle(.white.opacity(0.65))
+                Text("x código · y repositorio · z capacidad").font(.title3.weight(.light)).foregroundStyle(.white)
+                Text("4 recorridos · 12 medidas · escala discreta 1 → 3").font(.caption).foregroundStyle(.white.opacity(0.65))
                 Spacer()
-                HStack(spacing: 14) {
-                    legend("Código", value: codeScore)
-                    legend("Git", value: gitScore)
-                    legend("Operación", value: operationScore)
+                HStack(spacing: 18) {
+                    ForEach(metricRuns, id: \.name) { run in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(run.name).font(.caption2).foregroundStyle(run.color)
+                            Text("\(run.x) · \(run.y) · \(run.z)").font(.caption.monospaced()).foregroundStyle(.white)
+                        }
+                    }
                 }
                 Text("Arrastra para orbitar · pellizca para ampliar")
                     .font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.6))
@@ -196,43 +203,67 @@ public struct RepositorySceneView: View {
         }.background(DaemonPalette.panel).clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    private var codeScore: Int { min(100, max(8, insights.sourceLines / 120)) }
-    private var gitScore: Int { min(100, max(12, insights.fileCount / 2)) }
-    private var operationScore: Int {
-        min(100, insights.capabilities.count * 18 + (insights.hasDatabase ? 18 : 0) + (insights.hasLogin ? 14 : 0))
+    private struct MetricRun {
+        let name: String
+        let x: Int
+        let y: Int
+        let z: Int
+        let color: Color
     }
 
-    private func legend(_ title: String, value: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.white.opacity(0.65))
-            Text("\(value)%").font(.caption.monospaced().weight(.semibold)).foregroundStyle(.white)
-        }
+    private var metricRuns: [MetricRun] {
+        let density = level(insights.sourceLines, 3_000, 15_000)
+        let breadth = level(insights.fileCount, 60, 220)
+        let languages = level(insights.languages.count, 2, 5)
+        let git = repository.dirty == false ? 3 : (repository.dirty == true ? 1 : 2)
+        let sync = (repository.ahead ?? 0) == 0 && (repository.behind ?? 0) == 0 ? 3 : 1
+        let upstream = repository.upstream == nil ? 1 : 3
+        let runtime = level(insights.capabilities.count, 1, 3)
+        let persistence = insights.hasDatabase ? 3 : (insights.hasLogin ? 2 : 1)
+        let creative = (insights.blenderAvailable ? 1 : 0) + (insights.abletonAvailable ? 1 : 0) + 1
+        let scale = level(Int(insights.bytes), 500_000, 4_000_000)
+        let users = level(insights.usernames.count, 0, 4)
+        let tooling = level(insights.capabilities.count + insights.languages.count, 4, 9)
+        return [
+            MetricRun(name: "Código", x: density, y: breadth, z: languages, color: .white),
+            MetricRun(name: "Git", x: git, y: sync, z: upstream, color: .red),
+            MetricRun(name: "Runtime", x: runtime, y: persistence, z: min(3, creative), color: DaemonPalette.green),
+            MetricRun(name: "Escala", x: scale, y: users, z: tooling, color: .orange),
+        ]
+    }
+
+    private func level(_ value: Int, _ medium: Int, _ high: Int) -> Int {
+        value >= high ? 3 : (value >= medium ? 2 : 1)
     }
 
     private var scene: SCNScene {
         let scene = SCNScene()
         scene.background.contents = NSColor.black
-        let scores = [codeScore, gitScore, operationScore]
-        let combined = max(1, scores.reduce(0, +) / scores.count)
-        for x in 0..<3 {
-            for y in 0..<3 {
-                for z in 0..<3 {
-                    let threshold = ((x + 1) * scores[0] + (y + 1) * scores[1] + (z + 1) * scores[2]) / 9
-                    let active = threshold <= combined
-                    let box = SCNBox(width: 0.68, height: 0.68, length: 0.68, chamferRadius: 0.075)
-                    let material = SCNMaterial()
-                    let energy = CGFloat(scores[(x + y + z) % 3]) / 100
-                    material.diffuse.contents = NSColor(calibratedRed: 0.12 + energy * 0.12, green: active ? 0.78 + energy * 0.22 : 0.18, blue: 0.58 + energy * 0.32, alpha: active ? 0.86 : 0.16)
-                    material.emission.contents = NSColor(calibratedRed: 0.02, green: active ? 0.17 + energy * 0.18 : 0.02, blue: active ? 0.15 : 0.04, alpha: 1)
-                    material.transparency = active ? 0.92 : 0.28
-                    material.metalness.contents = 0.35
-                    material.roughness.contents = 0.28
-                    box.materials = [material]
-                    let node = SCNNode(geometry: box)
-                    node.position = SCNVector3(Float(x - 1) * 0.88, Float(y) * 0.88 + 0.36, Float(z - 1) * 0.88)
-                    scene.rootNode.addChildNode(node)
-                }
+        let wire = NSColor(calibratedWhite: 0.62, alpha: 0.42)
+        for a in [-1.5 as Float, 0, 1.5] {
+            for b in [-1.5 as Float, 0, 1.5] {
+                addLine(to: scene, from: SCNVector3(-1.5, a, b), to: SCNVector3(1.5, a, b), color: wire, radius: 0.008)
+                addLine(to: scene, from: SCNVector3(a, -1.5, b), to: SCNVector3(a, 1.5, b), color: wire, radius: 0.008)
+                addLine(to: scene, from: SCNVector3(a, b, -1.5), to: SCNVector3(a, b, 1.5), color: wire, radius: 0.008)
             }
+        }
+        let colors: [NSColor] = [.white, .systemRed, NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 1), .systemOrange]
+        for (index, run) in metricRuns.enumerated() {
+            let points = [
+                SCNVector3(coordinate(run.x), coordinate(run.y), -1.5),
+                SCNVector3(coordinate(run.x), coordinate(run.y), coordinate(run.z)),
+                SCNVector3(-1.5, coordinate(run.y), coordinate(run.z)),
+            ]
+            for point in points {
+                let sphere = SCNSphere(radius: index == 0 ? 0.09 : 0.065)
+                sphere.firstMaterial?.diffuse.contents = colors[index]
+                sphere.firstMaterial?.emission.contents = colors[index]
+                let node = SCNNode(geometry: sphere)
+                node.position = point
+                scene.rootNode.addChildNode(node)
+            }
+            addLine(to: scene, from: points[0], to: points[1], color: colors[index], radius: index == 0 ? 0.035 : 0.018)
+            addLine(to: scene, from: points[1], to: points[2], color: colors[index], radius: index == 0 ? 0.035 : 0.018)
         }
         let floor = SCNFloor()
         floor.reflectivity = 0.22
@@ -254,5 +285,19 @@ public struct RepositorySceneView: View {
         light.position = SCNVector3(-3, 6, 4)
         scene.rootNode.addChildNode(light)
         return scene
+    }
+
+    private func coordinate(_ value: Int) -> Float { Float(value - 2) * 1.5 }
+
+    private func addLine(to scene: SCNScene, from start: SCNVector3, to end: SCNVector3, color: NSColor, radius: CGFloat) {
+        let vector = SCNVector3(end.x - start.x, end.y - start.y, end.z - start.z)
+        let length = sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+        let cylinder = SCNCylinder(radius: radius, height: CGFloat(length))
+        cylinder.firstMaterial?.diffuse.contents = color
+        cylinder.firstMaterial?.emission.contents = color.withAlphaComponent(0.35)
+        let node = SCNNode(geometry: cylinder)
+        node.position = SCNVector3((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2)
+        node.look(at: end, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 1, 0))
+        scene.rootNode.addChildNode(node)
     }
 }
