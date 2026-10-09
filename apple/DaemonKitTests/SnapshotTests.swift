@@ -38,4 +38,22 @@ final class SnapshotTests: XCTestCase {
             XCTAssertFalse(snapshot.allowsRemoteControl)
         }
     }
+
+    func testMultipleRepositorySnapshotUsesOneEnvelope() throws {
+        let snapshot = try CoreBridge.snapshot(repositoryPaths: [
+            "/daemon-native-test-path-one-that-does-not-exist",
+            "/daemon-native-test-path-two-that-does-not-exist",
+        ])
+        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertEqual(snapshot.repositories.count, 2)
+        XCTAssertEqual(snapshot.repositories.map(\.evidence), [.unavailable, .unavailable])
+        XCTAssertFalse(snapshot.allowsRemoteControl)
+    }
+
+    func testEmptyRepositoryCatalogIsValid() throws {
+        let snapshot = try CoreBridge.snapshot(repositoryPaths: [])
+        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertTrue(snapshot.repositories.isEmpty)
+        XCTAssertFalse(snapshot.allowsRemoteControl)
+    }
 }

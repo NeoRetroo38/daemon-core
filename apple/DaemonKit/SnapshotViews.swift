@@ -46,14 +46,32 @@ public struct SnapshotDashboard: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            HStack(spacing: 10) {
+                metric("CATÁLOGO", "\(snapshot.repositories.count)")
+                metric("VERIFICADOS", "\(snapshot.verifiedRepositories)")
+                metric("LECTURAS", "\(snapshot.events.count)")
+                metric("LATENCIA MEDIA", "\(snapshot.averageObservationMilliseconds) ms")
+            }
             ForEach(snapshot.repositories) { repository in
                 RepositoryCard(repository: repository)
             }
             if snapshot.repositories.isEmpty {
                 evidencePanel(title: "Repositorios", message: "No hay evidencia en esta instantánea.")
             }
-            evidencePanel(title: "Servicios", message: "No verificado · esta lectura no comprueba API, VPN ni motor.")
-            evidencePanel(title: "Agentes", message: "No verificado · ningún agente se descubre por suposición.")
+            if snapshot.services.isEmpty {
+                evidencePanel(title: "Servicios", message: "No verificado · esta lectura no comprueba API, VPN ni motor.")
+            } else {
+                ForEach(snapshot.services) { service in
+                    evidencePanel(title: service.name, message: "\(service.evidence.label) · \(service.observedAt)")
+                }
+            }
+            if snapshot.agents.isEmpty {
+                evidencePanel(title: "Agentes", message: "No verificado · ningún agente se descubre por suposición.")
+            } else {
+                ForEach(snapshot.agents) { agent in
+                    evidencePanel(title: agent.name, message: "\(agent.evidence.label) · \(agent.activity ?? "Sin actividad declarada")")
+                }
+            }
             VStack(alignment: .leading, spacing: 8) {
                 Text("Siguiente acción").font(.caption).foregroundStyle(DaemonPalette.green)
                 Text(snapshot.nextAction).font(.body).textSelection(.enabled)
@@ -72,6 +90,19 @@ public struct SnapshotDashboard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 3)
+    }
+
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(label).font(.caption2.monospaced()).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 18, weight: .light, design: .monospaced))
+                .foregroundStyle(DaemonPalette.green)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(DaemonPalette.line))
     }
 }
 
