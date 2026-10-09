@@ -12,7 +12,7 @@
 namespace daemonx {
 
 struct GitObservationOptions {
-    std::chrono::milliseconds timeout{2000};
+    std::chrono::milliseconds timeout{5000};
     std::size_t maxOutputBytes{64 * 1024};
 };
 

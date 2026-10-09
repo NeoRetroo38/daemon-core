@@ -30,6 +30,10 @@ build/apple/Daemon.app/Contents/MacOS/Daemon --repo /ruta/al/repositorio
 ```
 
 El resultado local es `build/apple/Daemon.app`, con ejecutable y `Info.plist`.
+El bundle incorpora `Assets/Daemon.icns`, derivado del máster PNG versionado,
+y puede instalarse localmente en `/Applications/Daemon.app` con firma ad-hoc.
+La instalación local inicial puede precargar únicamente rutas seleccionadas;
+backups y clones fallidos no deben entrar en el catálogo operativo.
 Sin `--repo`, la aplicación usa un catálogo de rutas elegido por el usuario y
 persistido en `UserDefaults`. Añadir acepta una ruta o el selector de carpetas;
 quitar solo borra la entrada del catálogo y nunca elimina archivos. La

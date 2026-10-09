@@ -39,7 +39,7 @@ let package = Package(
         .target(name: "DaemonKit", dependencies: ["DaemonNativeCore"], path: "apple/DaemonKit"),
         .executableTarget(
             name: "DaemonMac", dependencies: ["DaemonKit"], path: "apple/DaemonMac",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist", "Assets"]
         ),
         .target(name: "DaemonIOS", dependencies: ["DaemonKit"], path: "apple/DaemonIOS"),
         .executableTarget(name: "DaemonBridgeChecks", dependencies: ["DaemonKit"], path: "apple/BridgeChecks"),
