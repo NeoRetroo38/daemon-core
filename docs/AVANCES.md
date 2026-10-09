@@ -18,3 +18,12 @@ La API de choisys envía las decisiones de cada fase y recibe la confirmación; 
 
 - Primera compilación y ejecución reales en macOS (`make test smoke`).
 - Inferencia: no existe y no se escribe sin una especificación matemática aprobada (`docs/INFERENCE_ARCHITECTURE.md`).
+# 9 de octubre de 2026 — workspace por repositorio
+
+- Selección directa de repositorios desde la barra lateral.
+- Métricas locales de archivos, líneas, tamaño, lenguajes y capacidades.
+- Diagnósticos de solo lectura para API, backend, frontend y Cubo.
+- Visualización 3D interactiva con SceneKit.
+- Detección de Blender y Ableton Live Lite como estudio creativo local.
+- Chat Nexo con personalidad inmutable y contexto del repositorio seleccionado.
+- Daemon continúa sin escribir código, ejecutar shell ni controlar servicios.

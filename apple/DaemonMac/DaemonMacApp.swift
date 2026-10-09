@@ -81,6 +81,7 @@ struct MacDashboard: View {
     @ObservedObject var model: MacDashboardModel
     @State private var choosingDirectory = false
     @State private var pendingPath = ""
+    @State private var selectedRepositoryPath: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -90,6 +91,13 @@ struct MacDashboard: View {
                     Text("Scenarys · consola nativa").font(.caption).foregroundStyle(.secondary)
                 }
                 Rectangle().fill(DaemonPalette.green).frame(width: 26, height: 2)
+                Button {
+                    selectedRepositoryPath = nil
+                } label: {
+                    Label("Resumen", systemImage: "square.grid.2x2").font(.subheadline)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selectedRepositoryPath == nil ? DaemonPalette.green : .primary)
                 Label("Repositorios · \(model.repositoryPaths.count)", systemImage: "folder").font(.subheadline)
                 Label("Evidencia local", systemImage: "checkmark.shield").font(.subheadline).foregroundStyle(.secondary)
                 ScrollView {
@@ -97,8 +105,14 @@ struct MacDashboard: View {
                         ForEach(model.repositoryPaths, id: \.self) { path in
                             HStack(spacing: 7) {
                                 Circle().fill(DaemonPalette.green).frame(width: 5, height: 5)
-                                Text(repositoryName(path))
-                                    .font(.caption.monospaced()).lineLimit(1)
+                                Button {
+                                    selectedRepositoryPath = path
+                                } label: {
+                                    Text(repositoryName(path))
+                                        .font(.caption.monospaced()).lineLimit(1)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(selectedRepositoryPath == path ? DaemonPalette.green : .primary)
                                 Spacer(minLength: 0)
                                 Button {
                                     model.removeRepository(path)
@@ -135,7 +149,16 @@ struct MacDashboard: View {
                 }
                 ScrollView {
                     if let snapshot = model.snapshot {
-                        SnapshotDashboard(snapshot: snapshot).padding(.bottom, 20)
+                        if let selectedRepositoryPath,
+                           let repository = snapshot.repositories.first(where: {
+                               $0.path == selectedRepositoryPath || model.repositoryPaths.first(where: { $0 == selectedRepositoryPath }) == selectedRepositoryPath && repositoryName($0.path) == repositoryName(selectedRepositoryPath)
+                           }) {
+                            RepositoryWorkspaceView(repository: repository)
+                                .frame(minHeight: 590)
+                                .padding(.bottom, 20)
+                        } else {
+                            SnapshotDashboard(snapshot: snapshot).padding(.bottom, 20)
+                        }
                     } else if let error = model.error {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("No verificado").font(.title.weight(.light))
@@ -152,6 +175,11 @@ struct MacDashboard: View {
         }
         .background(DaemonPalette.background)
         .task { await model.refresh() }
+        .onChange(of: model.repositoryPaths) { _, paths in
+            if let selectedRepositoryPath, !paths.contains(selectedRepositoryPath) {
+                self.selectedRepositoryPath = nil
+            }
+        }
         .fileImporter(isPresented: $choosingDirectory, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 model.addRepository(url.path)

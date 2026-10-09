@@ -38,6 +38,26 @@ La instantánea histórica del Cubo presente en este repo no se utiliza en el nu
 5. **Flujos creativos:** Blender y Ableton producen artefactos versionables o
    exportados; no se convierten en dependencias del runtime de Daemon.
 
+## Espacio de trabajo por repositorio
+
+La app macOS permite seleccionar cada repositorio del catálogo con un clic. Su
+vista mantiene cuatro superficies locales y de solo lectura:
+
+- **Métricas:** recuento acotado de archivos, líneas, tamaño, lenguajes y
+  capacidades detectadas, omitiendo `.git`, builds y dependencias vendorizadas.
+- **Pruebas:** comprobaciones de estructura para API, backend, frontend y Cubo,
+  más una sonda HTTP limitada a `127.0.0.1:8765`. No se invoca shell.
+- **Mapa 3D:** visualización SceneKit de la distribución tecnológica. Blender y
+  Ableton se detectan como herramientas creativas instaladas, pero no se lanzan
+  ni controlan desde el runtime.
+- **Agente:** Nexo conserva una identidad fija y recibe el snapshot y las
+  métricas del repositorio seleccionado. La versión actual responde y propone;
+  no edita archivos ni ejecuta implementaciones.
+
+El modo de solo lectura es una propiedad funcional, no solo una etiqueta de UI.
+La futura ejecución de código necesitará un contrato separado de propuesta,
+diff, aprobación explícita, ejecución acotada y verificación.
+
 La UI puede representar estas fases desde el mismo esquema, pero cada tarjeta
 debe mostrar `verificado`, `no disponible` o `no verificado` y la hora de la
 observación. Tráfico agregado no debe contener payloads, secretos ni tokens.

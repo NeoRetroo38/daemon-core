@@ -56,4 +56,21 @@ final class SnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.repositories.isEmpty)
         XCTAssertFalse(snapshot.allowsRemoteControl)
     }
+
+    func testRepositoryInspectorFindsLocalCapabilitiesWithoutWriting() throws {
+        let insights = RepositoryInspector.inspect(path: FileManager.default.currentDirectoryPath)
+        XCTAssertGreaterThan(insights.fileCount, 0)
+        XCTAssertGreaterThan(insights.sourceLines, 0)
+        XCTAssertTrue(insights.capabilities.contains("Swift nativo"))
+        XCTAssertTrue(insights.capabilities.contains("C++ / Cubo"))
+    }
+
+    func testFilesystemDiagnosticOnlyReportsExistingEvidence() async {
+        let diagnostic = RepositoryDiagnostic(
+            id: "fixture", title: "Fixture", detail: "Read only",
+            kind: .files([FileManager.default.currentDirectoryPath + "/Package.swift"])
+        )
+        let state = await DiagnosticCatalog.run(diagnostic)
+        guard case .passed = state else { return XCTFail("Expected existing read-only evidence") }
+    }
 }
