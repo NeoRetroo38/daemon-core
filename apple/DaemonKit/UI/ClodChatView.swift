@@ -33,8 +33,12 @@ public struct ClodChatView: View {
                             }
                         }
                         .padding(.horizontal, 28).padding(.vertical, 22)
+                        .frame(maxWidth: 920).frame(maxWidth: .infinity)
                     }
-                    .onChange(of: clod.messages.count) { _, _ in
+                    .onChange(of: clod.messages.last?.text) { _, _ in
+                    if let last = clod.messages.last?.id { proxy.scrollTo(last, anchor: .bottom) }
+                }
+                .onChange(of: clod.messages.count) { _, _ in
                         if let last = clod.messages.last?.id { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last, anchor: .bottom) } }
                     }
                 }
@@ -103,6 +107,9 @@ public struct ClodChatView: View {
             }
             .buttonStyle(.plain).disabled(clod.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(DaemonPalette.line))
         .padding(.horizontal, 22).padding(.vertical, 14)
         .onAppear { focused = true }
     }

@@ -8,6 +8,12 @@ public struct RoutedIntent: Sendable, Equatable {
     /// Neo lo pidió de forma explícita (verbo imperativo): cuenta como aprobación
     /// para herramientas no destructivas.
     public let explicitCommand: Bool
+
+    public init(tool: String, arguments: [String: String], explicitCommand: Bool) {
+        self.tool = tool
+        self.arguments = arguments
+        self.explicitCommand = explicitCommand
+    }
 }
 
 public enum IntentRouter {
@@ -79,5 +85,23 @@ public enum IntentRouter {
         if has(text, "latencia") { return intent("service.health") }
         if repo != nil { return intent("repo.status") }
         return nil
+    }
+
+    /// «¿y en daemon-core?», «y el 3000», «¿y ahora?»: frases cortas que continúan el hilo.
+    public static func isFollowUp(_ raw: String) -> Bool {
+        let text = fold(raw).trimmingCharacters(in: .whitespaces)
+        return text.split(separator: " ").count <= 6 &&
+            (text.hasPrefix("y ") || text.hasPrefix("¿y ") || text.hasPrefix("e ") || text.hasPrefix("tambien") ||
+             text.hasPrefix("otra vez") || text.hasPrefix("de nuevo") || text.hasPrefix("ahora") || text.hasPrefix("¿ahora"))
+    }
+
+    /// Reutiliza la intención anterior cambiando solo lo que la nueva frase aporta.
+    public static func followUp(_ raw: String, previous: RoutedIntent?, repositories: [String]) -> RoutedIntent? {
+        guard let previous, isFollowUp(raw) || raw.split(separator: " ").count <= 3 else { return nil }
+        var arguments = previous.arguments
+        if let repo = repository(in: raw, names: repositories) { arguments["repo"] = repo }
+        if let port = port(in: fold(raw)) { arguments["port"] = port }
+        if fold(raw).contains("hoy") { arguments["since"] = "today" }
+        return RoutedIntent(tool: previous.tool, arguments: arguments, explicitCommand: previous.explicitCommand)
     }
 }

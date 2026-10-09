@@ -32,6 +32,10 @@ public struct AgentChatView: View {
                         }
                     }
                     .padding(.horizontal, 28).padding(.vertical, 22)
+                    .frame(maxWidth: 920).frame(maxWidth: .infinity)
+                }
+                .onChange(of: session.messages.last?.text) { _, _ in
+                    if let last = session.messages.last?.id { proxy.scrollTo(last, anchor: .bottom) }
                 }
                 .onChange(of: session.messages.count) { _, _ in
                     if let last = session.messages.last?.id { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last, anchor: .bottom) } }
@@ -92,6 +96,9 @@ public struct AgentChatView: View {
             .buttonStyle(.plain).disabled(session.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .keyboardShortcut(.return, modifiers: .command)
         }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(DaemonPalette.line))
         .padding(.horizontal, 22).padding(.vertical, 14)
         .onAppear { focused = true }
     }
@@ -109,38 +116,96 @@ struct MessageRow: View {
     let perform: (AgentAction) -> Void
     let config: TopologyConfig
     let liveServices: (String) -> Int?
+    @State private var showTrace = false
 
-    var roleLabel: String { message.role == .clod ? "CLOD" : "DAEMON" }
+    var roleLabel: String { message.role == .clod ? "Clod" : "Daemon" }
     var roleColor: Color { message.role == .clod ? DaemonPalette.violet : DaemonPalette.green }
 
     var body: some View {
         if message.role == .neo {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("NEO").font(DaemonFont.label).tracking(1.2).foregroundStyle(DaemonPalette.dim).frame(width: 52, alignment: .leading)
+            HStack {
+                Spacer(minLength: 120)
                 Text(message.text).font(.system(size: 14)).foregroundStyle(DaemonPalette.ink).textSelection(.enabled)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.07)))
             }
         } else {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(roleLabel).font(DaemonFont.label).tracking(1.2).foregroundStyle(roleColor)
-                    if let evidence = message.evidence { StatusDot(evidence) }
-                }.frame(width: 52, alignment: .leading)
-                VStack(alignment: .leading, spacing: 12) {
-                    if message.pending {
-                        HStack(spacing: 8) { ProgressView().controlSize(.small); Text("midiendo el entorno…").font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.dim) }
-                    } else {
-                        Text(message.text).font(.system(size: 14)).foregroundStyle(DaemonPalette.ink).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                        ForEach(message.blocks) { block in BlockView(block: block, perform: perform, config: config, liveServices: liveServices) }
+            HStack(alignment: .top, spacing: 14) {
+                avatar
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Text(roleLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(roleColor)
+                        if let evidence = message.evidence, !message.streaming { EvidenceTag(evidence) }
+                    }
+                    if !message.trace.isEmpty { traceView }
+                    if !message.text.isEmpty || message.streaming {
+                        (Text(markdown(message.text)) + Text(message.streaming ? " ▍" : "").foregroundColor(roleColor))
+                            .font(.system(size: 14.5)).lineSpacing(4)
+                            .foregroundStyle(DaemonPalette.ink).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(message.blocks) { block in
+                        BlockView(block: block, perform: perform, config: config, liveServices: liveServices)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                    if !message.pending && !message.streaming {
                         HStack(spacing: 10) {
-                            if let evidence = message.evidence { EvidenceTag(evidence) }
-                            if !message.tools.isEmpty { Text(message.tools.joined(separator: " · ")).font(DaemonFont.label).foregroundStyle(DaemonPalette.faint) }
-                            Text(DaemonClock.iso(message.timestamp)).font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+                            Text(message.engine.isEmpty || message.engine == "local" ? "voz local · 0 tokens" : message.engine)
+                            Text(DaemonClock.relative(message.timestamp))
+                        }
+                        .font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+                    }
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    var avatar: some View {
+        ZStack {
+            Circle().fill(roleColor.opacity(0.12)).frame(width: 28, height: 28)
+            if message.role == .clod {
+                Text("C").font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(DaemonPalette.violet)
+            } else {
+                DaemonSigil(active: message.pending || message.streaming).frame(width: 18, height: 18)
+            }
+        }
+    }
+
+    /// Pasos de herramienta, plegados como el «tool use» de un LLM.
+    var traceView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            let running = message.trace.contains { $0.state == .running }
+            Button { withAnimation(.easeOut(duration: 0.2)) { showTrace.toggle() } } label: {
+                HStack(spacing: 6) {
+                    if running { ProgressView().controlSize(.mini) } else { Image(systemName: showTrace ? "chevron.down" : "chevron.right").font(.system(size: 9)) }
+                    Text(running ? (message.trace.last?.label ?? "pensando") : "\(message.trace.count) \(message.trace.count == 1 ? "paso" : "pasos") · \(message.trace.compactMap(\.milliseconds).reduce(0, +)) ms")
+                        .font(.system(size: 11.5, design: .monospaced))
+                }
+                .foregroundStyle(DaemonPalette.dim)
+            }
+            .buttonStyle(.plain)
+            if showTrace || running {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(message.trace) { step in
+                        HStack(spacing: 6) {
+                            Image(systemName: step.state == .running ? "circle.dotted" : (step.state == .failed ? "xmark.circle" : "checkmark.circle"))
+                                .font(.system(size: 9)).foregroundStyle(step.state == .failed ? DaemonPalette.red : roleColor.opacity(0.8))
+                            Text(step.label).font(.system(size: 11, design: .monospaced)).foregroundStyle(DaemonPalette.dim)
+                            if !step.detail.isEmpty { Text(step.detail).font(.system(size: 10)).foregroundStyle(DaemonPalette.faint) }
+                            if let ms = step.milliseconds { Text("\(ms) ms").font(.system(size: 10, design: .monospaced)).foregroundStyle(DaemonPalette.faint) }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 4)
+                .overlay(alignment: .leading) { Rectangle().fill(DaemonPalette.line).frame(width: 1).offset(x: -6) }
             }
         }
+    }
+
+    func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     }
 }
 

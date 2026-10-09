@@ -160,6 +160,12 @@ public enum EcosystemProbe {
                                       detail: "\(socket.command) (PID \(socket.pid)) en \(socket.address). \(known.map { "Servicio \($0.name): visible fuera de este Mac." } ?? "Proceso de desarrollo no declarado.")",
                                       provenance: ports.provenance))
         }
+        for service in services where service.machine == .desktop && service.note?.hasPrefix("también abierto directo") == true {
+            alerts.append(DaemonAlert(id: "desktop-direct-\(service.definition.id)", level: .warning,
+                                      title: "\(service.definition.name): puerto local del PC accesible por la tailnet",
+                                      detail: "Se publica por Tailscale Serve (\(service.endpoint ?? "")) y además :\(service.definition.port.map(String.init) ?? "?") acepta TCP directo. Si debía escuchar solo en 127.0.0.1, revisa el bind en el PC.",
+                                      provenance: service.probe?.provenance ?? ports.provenance))
+        }
         if !systemListeners.isEmpty {
             let names = Array(Set(systemListeners.map { $0.knownLabel ?? $0.command })).sorted().joined(separator: ", ")
             alerts.append(DaemonAlert(id: "system-listeners", level: .info, title: "\(systemListeners.count) listeners del sistema en todas las interfaces",
@@ -216,6 +222,14 @@ public enum EcosystemProbe {
             }
             // Por nombre MagicDNS (*.ts.net): ATS lo permite por excepción; una IP literal no.
             let host = desktop.dnsName.isEmpty ? ip : desktop.dnsName
+            if let template = definition.remoteURL, !desktop.dnsName.isEmpty,
+               let url = URL(string: template.replacingOccurrences(of: "{desktop}", with: desktop.dnsName)) {
+                // Ruta publicada (Tailscale Serve, HTTPS); el puerto local del PC se comprueba aparte.
+                let published = await NetworkProbe.http(url, timeout: 4)
+                let direct = await NetworkProbe.tcp(host: ip, port: port, timeout: 1.2)
+                let note = direct.reachable ? "también abierto directo en :\(port) por la tailnet" : nil
+                return await status(url.absoluteString, published, note: note)
+            }
             let url = URL(string: "http://\(host):\(port)\(definition.healthPath ?? "/")")!
             return await status(url.absoluteString, await NetworkProbe.http(url, timeout: 4))
         case .iphone:

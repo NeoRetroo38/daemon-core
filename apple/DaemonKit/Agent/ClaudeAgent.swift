@@ -131,4 +131,48 @@ public enum ClaudeAgent {
                            evidence: Evidence.weakest(evidences), toolsUsed: used)
     }
 }
+
+extension ClaudeAgent {
+    /// Redacción en streaming (SSE) de una respuesta basada solo en el
+    /// resultado medido de una herramienta. Sin tools: no puede inventar acciones.
+    public static func composeStream(question: String, history: [(role: String, text: String)], toolName: String,
+                                     outcome: ToolOutcome) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let key = AgentKeychain.read() else { throw ClaudeAgentError.notConfigured }
+                    let system = DaemonPersona.systemPrompt(digest: "(no necesario)", ecosystem: "(ver resultado)") + """
+
+                    Ahora redacta tu respuesta a Neo usando EXCLUSIVAMENTE el resultado de la herramienta que te paso.                     Conversacional, breve (2–6 frases), en primera persona, con **negritas** para cifras clave.                     Menciona la evidencia (verificado/parcial/no verificado). No repitas tablas: la interfaz ya las muestra debajo.                     Si tiene sentido, termina con una pregunta o un siguiente paso concreto.
+                    """
+                    var messages: [[String: Any]] = history.suffix(6).map { ["role": $0.role, "content": $0.text.isEmpty ? "…" : $0.text] }
+                    while let first = messages.first, first["role"] as? String != "user" { messages.removeFirst() }
+                    messages.append(["role": "user", "content": "\(question)\n\n[resultado de \(toolName), evidencia \(outcome.evidence.label)]\n\(String(outcome.digest.prefix(5000)))"])
+                    let body: [String: Any] = ["model": AgentSettings.model, "max_tokens": 600, "stream": true, "system": system, "messages": messages]
+                    var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: 60)
+                    request.httpMethod = "POST"
+                    request.setValue(key, forHTTPHeaderField: "x-api-key")
+                    request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                    request.setValue("application/json", forHTTPHeaderField: "content-type")
+                    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                    let (bytes, response) = try await NetworkProbe.session.bytes(for: request)
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    guard code == 200 else { throw ClaudeAgentError.http(code, "stream") }
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data: "), let data = line.dropFirst(6).data(using: .utf8),
+                              let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                        if event["type"] as? String == "content_block_delta",
+                           let delta = event["delta"] as? [String: Any], let text = delta["text"] as? String {
+                            continuation.yield(text)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
 #endif

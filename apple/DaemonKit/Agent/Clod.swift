@@ -151,7 +151,7 @@ public final class ClodSession: ObservableObject {
             let reply = connected
                 ? "Dejado en el buzón para Claude: \(saved?.lastPathComponent ?? "no se pudo guardar")."
                 : "Sin API key no puedo razonar aquí, pero no pierdo nada: lo he dejado en el buzón (\(saved?.lastPathComponent ?? "error")) y la próxima sesión de Claude lo leerá. Mientras, escribe «@daemon …» para medir algo."
-            messages.append(ChatMessage(role: .clod, text: reply, blocks: [], evidence: saved == nil ? .failed : .verified, tools: ["buzon"], pending: false, engine: "local"))
+            run(role: .clod) { ToolOutcome(text: reply, evidence: saved == nil ? .failed : .verified, toolsUsed: ["buzon"]) }
             return
         }
         let history = messages.dropLast().suffix(10).map { (role: $0.role == .neo ? "user" : "assistant", text: $0.text) }
@@ -195,16 +195,32 @@ public final class ClodSession: ObservableObject {
 
     private func run(role: ChatMessage.Role, _ work: @escaping @Sendable () async -> ToolOutcome) {
         busy = true
-        messages.append(ChatMessage(role: role, text: "…", blocks: [], evidence: nil, tools: [], pending: true, engine: ""))
+        var placeholder = ChatMessage(role: role, text: "", pending: true)
+        placeholder.trace = [TraceStep(label: role == .clod ? "Leyendo memoria, bitácora y buzón" : "Daemon midiendo", detail: "", state: .running)]
+        messages.append(placeholder)
         let index = messages.count - 1
+        let started = Date()
         Task { [weak self] in
             let outcome = await work()
-            guard let self else { return }
-            self.messages[index].text = outcome.text
-            self.messages[index].blocks = outcome.blocks
+            guard let self, self.messages.indices.contains(index) else { return }
+            self.messages[index].trace[0].state = outcome.evidence == .failed ? .failed : .done
+            self.messages[index].trace[0].milliseconds = Int(Date().timeIntervalSince(started) * 1000)
+            for tool in outcome.toolsUsed where !tool.hasPrefix("llm:") {
+                self.messages[index].trace.append(TraceStep(label: tool, detail: ToolCatalog.spec(tool)?.technology ?? "", state: .done))
+            }
             self.messages[index].evidence = outcome.evidence
             self.messages[index].tools = outcome.toolsUsed
             self.messages[index].pending = false
+            self.messages[index].streaming = true
+            let full = role == .clod ? outcome.text : DaemonVoice.compose(question: "", tool: outcome.toolsUsed.first, outcome: outcome)
+            await Typewriter.reveal(full) { [weak self] shown, _ in
+                guard let self, self.messages.indices.contains(index) else { return }
+                self.messages[index].text = shown
+            }
+            withAnimation(.easeOut(duration: 0.3)) {
+                self.messages[index].blocks = outcome.blocks
+                self.messages[index].streaming = false
+            }
             self.busy = false
             if role == .clod { SoundBoard.shared.play(.clod) } else { SoundBoard.shared.play(for: outcome.evidence) }
         }
