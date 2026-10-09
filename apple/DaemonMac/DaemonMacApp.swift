@@ -5,33 +5,54 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class MacDashboardModel: ObservableObject {
-    @Published var path: String
+    @Published private(set) var repositoryPaths: [String]
     @Published private(set) var snapshot: DaemonSnapshot?
     @Published private(set) var error: String?
     @Published private(set) var refreshing = false
 
+    private static let catalogKey = "daemon.repositoryCatalog.v1"
+
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "--repo"), arguments.indices.contains(index + 1) {
-            path = arguments[index + 1]
+            repositoryPaths = [arguments[index + 1]]
         } else {
-            path = ""
+            repositoryPaths = UserDefaults.standard.stringArray(forKey: Self.catalogKey) ?? []
         }
+    }
+
+    func addRepository(_ rawPath: String) {
+        let path = (rawPath as NSString).expandingTildeInPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty, !repositoryPaths.contains(path) else { return }
+        repositoryPaths.append(path)
+        persistCatalog()
+    }
+
+    func removeRepository(_ path: String) {
+        repositoryPaths.removeAll { $0 == path }
+        persistCatalog()
+        snapshot = nil
+        error = repositoryPaths.isEmpty ? "Añade al catálogo uno o más repositorios Git." : nil
+    }
+
+    private func persistCatalog() {
+        UserDefaults.standard.set(repositoryPaths, forKey: Self.catalogKey)
     }
 
     func refresh() async {
         guard !refreshing else { return }
-        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !repositoryPaths.isEmpty else {
             snapshot = nil
-            error = "Selecciona explícitamente un repositorio Git."
+            error = "Añade al catálogo uno o más repositorios Git."
             return
         }
         refreshing = true
         error = nil
-        let repositoryPath = path
+        let paths = repositoryPaths
         do {
             let value = try await Task.detached(priority: .userInitiated) {
-                try CoreBridge.snapshot(repositoryPath: repositoryPath)
+                try CoreBridge.snapshot(repositoryPaths: paths)
             }.value
             snapshot = value
         } catch {
@@ -59,6 +80,7 @@ struct DaemonMacApp: App {
 struct MacDashboard: View {
     @ObservedObject var model: MacDashboardModel
     @State private var choosingDirectory = false
+    @State private var pendingPath = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -68,8 +90,27 @@ struct MacDashboard: View {
                     Text("Scenarys · consola nativa").font(.caption).foregroundStyle(.secondary)
                 }
                 Rectangle().fill(DaemonPalette.green).frame(width: 26, height: 2)
-                Label("Repositorios", systemImage: "folder").font(.subheadline)
+                Label("Repositorios · \(model.repositoryPaths.count)", systemImage: "folder").font(.subheadline)
                 Label("Evidencia local", systemImage: "checkmark.shield").font(.subheadline).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.repositoryPaths, id: \.self) { path in
+                            HStack(spacing: 7) {
+                                Circle().fill(DaemonPalette.green).frame(width: 5, height: 5)
+                                Text(URL(fileURLWithPath: path).lastPathComponent)
+                                    .font(.caption.monospaced()).lineLimit(1)
+                                Spacer(minLength: 0)
+                                Button {
+                                    model.removeRepository(path)
+                                } label: {
+                                    Image(systemName: "xmark").font(.caption2)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Quitar del catálogo; no elimina archivos")
+                            }
+                        }
+                    }
+                }
                 Spacer()
                 Text("CORE \(CoreBridge.version)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 Text("Lectura manual\nSin control remoto").font(.caption).foregroundStyle(.secondary)
@@ -81,12 +122,14 @@ struct MacDashboard: View {
             Rectangle().fill(DaemonPalette.line).frame(width: 1)
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 10) {
-                    TextField("Ruta de un repositorio Git", text: $model.path)
+                    TextField("Ruta de un repositorio Git", text: $pendingPath)
                         .textFieldStyle(.plain).font(.caption.monospaced())
                         .padding(10).background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 7))
-                        .onSubmit { Task { await model.refresh() } }
+                        .onSubmit { addPendingRepository() }
                     Button { choosingDirectory = true } label: { Image(systemName: "folder") }
                         .help("Elegir un repositorio")
+                    Button("Añadir") { addPendingRepository() }
+                        .disabled(pendingPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button(model.refreshing ? "Leyendo…" : "Actualizar") { Task { await model.refresh() } }
                         .disabled(model.refreshing).keyboardShortcut("r", modifiers: .command)
                 }
@@ -97,7 +140,8 @@ struct MacDashboard: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("No verificado").font(.title.weight(.light))
                             Text(error).foregroundStyle(.secondary)
-                            Text("Elige un repositorio y vuelve a actualizar.")
+                            Text("El catálogo solo guarda rutas locales; quitar una entrada nunca borra archivos.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         ProgressView("Leyendo el repositorio…").frame(maxWidth: .infinity, minHeight: 250)
@@ -110,9 +154,15 @@ struct MacDashboard: View {
         .task { await model.refresh() }
         .fileImporter(isPresented: $choosingDirectory, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
-                model.path = url.path
+                model.addRepository(url.path)
                 Task { await model.refresh() }
             }
         }
+    }
+
+    private func addPendingRepository() {
+        model.addRepository(pendingPath)
+        pendingPath = ""
+        Task { await model.refresh() }
     }
 }

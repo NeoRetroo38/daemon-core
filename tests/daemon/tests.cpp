@@ -70,6 +70,13 @@ void traceAndJsonTests() {
     char* invalid = daemon_snapshot_json(nullptr);
     require(invalid && std::strstr(invalid, "EXPLICIT_REPOSITORY_REQUIRED"), "ABI handles explicit path error");
     daemon_free_string(invalid);
+    const char* multiplePaths[] = {"/missing-one", "/missing-two"};
+    char* multiple = daemon_snapshot_json_many(multiplePaths, 2);
+    require(multiple && std::strstr(multiple, "missing-one") && std::strstr(multiple, "missing-two"), "ABI groups explicit repository paths");
+    daemon_free_string(multiple);
+    char* empty = daemon_snapshot_json_many(nullptr, 0);
+    require(empty && std::strstr(empty, "\"repositories\":[]"), "ABI accepts an empty explicit catalog");
+    daemon_free_string(empty);
     daemon_free_string(nullptr);
 }
 

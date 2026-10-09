@@ -6,6 +6,8 @@ consume únicamente la ABI C de `include/daemon/daemon_bridge.h`:
 
 - `daemon_core_version()` devuelve una cadena estática; no se libera.
 - `daemon_snapshot_json(repo_path)` devuelve JSON UTF-8 propiedad del llamador.
+- `daemon_snapshot_json_many(repo_paths, count)` agrupa rutas explícitas en una
+  sola instantánea; no descubre directorios ni redes por su cuenta.
 - `daemon_free_string()` libera esa cadena exactamente una vez.
 
 `DaemonKit` decodifica el esquema 1 y presenta estados verificado, no disponible
@@ -28,8 +30,10 @@ build/apple/Daemon.app/Contents/MacOS/Daemon --repo /ruta/al/repositorio
 ```
 
 El resultado local es `build/apple/Daemon.app`, con ejecutable y `Info.plist`.
-Sin `--repo`, la aplicación pide seleccionar explícitamente un checkout y no
-presupone que un directorio de trabajo sea un repositorio. El proceso no instala la aplicación, modifica Git,
+Sin `--repo`, la aplicación usa un catálogo de rutas elegido por el usuario y
+persistido en `UserDefaults`. Añadir acepta una ruta o el selector de carpetas;
+quitar solo borra la entrada del catálogo y nunca elimina archivos. La
+aplicación no presupone que un directorio sea un repositorio. El proceso no instala la aplicación, modifica Git,
 configura Tailscale ni abre puertos. Este paquete no incorpora distribución
 firmada ni notarización; tampoco cambia permisos de seguridad de macOS.
 
@@ -38,13 +42,10 @@ funcionando, `DAEMON_APPLE_BUILD_DRIVER=swiftpm bash scripts/apple-build-macos.s
 elige ese constructor. `DAEMON_APPLE_SDK` permite seleccionar un SDK local sin
 cambiar la configuración global de Xcode; si existe se prefiere macOS 26.5.
 
-Verificación en este Mac (8 oct 2026): Swift 6.3.3, SDK macOS 26.5, compilación
+Verificación en este Mac (9 oct 2026): Swift 6.3.3, SDK macOS 26.5, compilación
 del núcleo y app completada, checks del puente correctos e `Info.plist`
-validado. También pasó el typecheck de la vista iOS contra el SDK de macOS,
-que sólo comprueba el código SwiftUI compartido. SwiftPM/XCTest no pudieron
-ejecutarse: `swift-package` aborta por una incompatibilidad instalada de
-`BuildServerProtocol`; el constructor directo evita esa dependencia sin
-modificar las herramientas del sistema. Falta verificar con el SDK iOS real,
+validado. SwiftPM/XCTest ejecutó 7 pruebas correctamente, incluidas instantáneas
+multi-repositorio y catálogo vacío. Falta verificar con el SDK iOS real,
 Xcode completo, simulador y dispositivo.
 
 ## iPhone/iPad

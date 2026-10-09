@@ -46,10 +46,28 @@ public struct RepositorySnapshot: Codable, Identifiable, Sendable {
 }
 
 // Reserved sections remain evidence-only. Empty arrays do not mean healthy services.
-public struct SnapshotEvidence: Codable, Sendable {
-    public let name: String?
-    public let status: String?
-    public let message: String?
+public struct ServiceSnapshot: Codable, Identifiable, Sendable {
+    public let name: String
+    public let status: String
+    public let healthy: Bool?
+    public let observedAt: String
+
+    public var id: String { name }
+    public var evidence: EvidenceState {
+        status == "ready" ? .verified : (status == "unavailable" ? .unavailable : .unknown)
+    }
+}
+
+public struct AgentSnapshot: Codable, Identifiable, Sendable {
+    public let name: String
+    public let status: String
+    public let activity: String?
+    public let observedAt: String
+
+    public var id: String { name }
+    public var evidence: EvidenceState {
+        status == "ready" ? .verified : (status == "unavailable" ? .unavailable : .unknown)
+    }
 }
 
 public struct TraceEventSnapshot: Codable, Sendable {
@@ -69,12 +87,16 @@ public struct DaemonSnapshot: Codable, Sendable {
     public let timestamp: String?
     public let mode: String
     public let repositories: [RepositorySnapshot]
-    public let services: [SnapshotEvidence]
-    public let agents: [SnapshotEvidence]
+    public let services: [ServiceSnapshot]
+    public let agents: [AgentSnapshot]
     public let events: [TraceEventSnapshot]
     public let nextAction: String
 
     public var verifiedRepositories: Int { repositories.filter { $0.evidence == .verified }.count }
+    public var averageObservationMilliseconds: UInt64 {
+        guard !events.isEmpty else { return 0 }
+        return events.map(\.durationMs).reduce(0, +) / UInt64(events.count)
+    }
     public var allowsRemoteControl: Bool { false }
 
     public static func decode(_ data: Data) throws -> Self {
