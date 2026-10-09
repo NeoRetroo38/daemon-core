@@ -56,6 +56,8 @@ public enum RepositoryFingerprint {
 public actor RepositoryIndex {
     public static let shared = RepositoryIndex()
     private var memory: [String: RepositoryRecord] = [:]
+    /// Escaneos en curso: varias peticiones del mismo repo comparten uno solo.
+    private var inFlight: [String: Task<RepositoryRecord, Never>] = [:]
     /// Tiempo máximo de reutilización aunque la huella no cambie (actividad reciente).
     private let maximumAge: TimeInterval = 3600
 
@@ -78,13 +80,19 @@ public actor RepositoryIndex {
             memory[path] = existing
             return existing
         }
-        let started = Date()
-        async let insights = Task.detached(priority: .utility) { RepositoryInspector.inspect(path: path) }.value
-        async let git = GitInsightsProbe.observe(path: path)
-        var record = RepositoryRecord(path: path, name: repository.name, fingerprint: fingerprint, insights: await insights, git: await git,
-                                      scannedAt: started, scanMs: Int(Date().timeIntervalSince(started) * 1000),
-                                      github: cached(path)?.github)
-        record.reused = false
+        if let running = inFlight[path] { return await running.value }
+        let name = repository.name
+        let github = cached(path)?.github
+        let task = Task<RepositoryRecord, Never>.detached(priority: .userInitiated) {
+            let started = Date()
+            async let insights = Task.detached(priority: .userInitiated) { RepositoryInspector.inspect(path: path) }.value
+            async let git = GitInsightsProbe.observe(path: path)
+            return RepositoryRecord(path: path, name: name, fingerprint: fingerprint, insights: await insights, git: await git,
+                                    scannedAt: started, scanMs: Int(Date().timeIntervalSince(started) * 1000), github: github)
+        }
+        inFlight[path] = task
+        let record = await task.value
+        inFlight[path] = nil
         memory[path] = record
         DaemonStore.write(record, to: Self.fileName(path))
         return record

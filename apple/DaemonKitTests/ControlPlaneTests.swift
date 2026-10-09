@@ -200,3 +200,28 @@ final class ControlPlaneTests: XCTestCase {
         XCTAssertEqual(snapshot.productPath.first { $0.id == "neon" }?.evidence, .unverified)
     }
 }
+
+final class ConversationTests: XCTestCase {
+    func testFollowUpReusesPreviousIntent() {
+        let repos = ["choisys", "daemon-core"]
+        let previous = IntentRouter.route("¿qué cambios tiene choisys?", repositories: repos) ?? RoutedIntent(tool: "repo.status", arguments: ["repo": "choisys"], explicitCommand: false)
+        XCTAssertTrue(IntentRouter.isFollowUp("¿y daemon-core?"))
+        let next = IntentRouter.followUp("¿y daemon-core?", previous: previous, repositories: repos)
+        XCTAssertEqual(next?.tool, previous.tool)
+        XCTAssertEqual(next?.arguments["repo"], "daemon-core")
+        let ports = IntentRouter.followUp("y el 3000", previous: RoutedIntent(tool: "system.ports", arguments: ["port": "8081"], explicitCommand: false), repositories: repos)
+        XCTAssertEqual(ports?.arguments["port"], "3000")
+        XCTAssertNil(IntentRouter.followUp("¿y daemon-core?", previous: nil, repositories: repos))
+    }
+
+    func testVoiceKeepsMeasuredContentAndEmphasis() {
+        let outcome = ToolOutcome(text: ":8081 lo usa node (PID 12) en 127.0.0.1, CPU 1.5 %, latencia 40 ms.", evidence: .verified, toolsUsed: ["system.ports"])
+        let text = DaemonVoice.compose(question: "¿qué usa 8081?", tool: "system.ports", outcome: outcome)
+        XCTAssertTrue(text.contains("**:8081**"))
+        XCTAssertTrue(text.contains("**40 ms**"))
+        XCTAssertTrue(text.contains("PID 12"))
+        XCTAssertEqual(DaemonVoice.compose(question: "a", tool: "x", outcome: outcome), DaemonVoice.compose(question: "a", tool: "x", outcome: outcome), "deterministic")
+        let unverified = DaemonVoice.compose(question: "b", tool: nil, outcome: ToolOutcome(text: "nada", evidence: .unverified))
+        XCTAssertFalse(unverified.lowercased().contains("lo acabo de medir"))
+    }
+}

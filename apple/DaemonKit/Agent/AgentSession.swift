@@ -2,10 +2,21 @@
 import Foundation
 import SwiftUI
 
+/// Paso visible del razonamiento de un agente (como el tool use de un LLM).
+public struct TraceStep: Identifiable, Sendable, Hashable {
+    public enum State: Sendable, Hashable { case running, done, failed }
+    public let id = UUID()
+    public var label: String
+    public var detail: String
+    public var state: State
+    public var milliseconds: Int?
+}
+
 public struct ChatMessage: Identifiable, Sendable {
     public enum Role: String, Sendable { case neo, daemon, clod }
     public let id = UUID()
     public let role: Role
+    /// Texto mostrado (crece mientras se «escribe»).
     public var text: String
     public var blocks: [AgentBlock]
     public var evidence: Evidence?
@@ -13,17 +24,57 @@ public struct ChatMessage: Identifiable, Sendable {
     public let timestamp = Date()
     public var pending: Bool
     public var engine: String
+    public var trace: [TraceStep] = []
+    public var streaming = false
+
+    public init(role: Role, text: String, blocks: [AgentBlock] = [], evidence: Evidence? = nil, tools: [String] = [],
+                pending: Bool = false, engine: String = "") {
+        self.role = role
+        self.text = text
+        self.blocks = blocks
+        self.evidence = evidence
+        self.tools = tools
+        self.pending = pending
+        self.engine = engine
+    }
 }
 
-/// Conversación con Daemon. El router local resuelve la mayoría de preguntas
-/// con herramientas y datos medidos; el LLM solo entra si hay API key y no
-/// hay intención reconocida.
+/// Revela texto a ritmo de lectura, como un modelo que genera tokens.
+@MainActor
+enum Typewriter {
+    static func reveal(_ full: String, update: @escaping @MainActor (String, Bool) -> Void) async {
+        var shown = ""
+        var remaining = Substring(full)
+        while !remaining.isEmpty {
+            // Trozos de 1–4 «tokens» (palabras o signos) con pausas cortas y naturales.
+            let take = Int.random(in: 1...4)
+            var chunk = ""
+            for _ in 0..<take {
+                guard let next = remaining.firstIndex(where: { $0 == " " || $0 == "\n" }) else { chunk += remaining; remaining = ""; break }
+                let end = remaining.index(after: next)
+                chunk += remaining[..<end]
+                remaining = remaining[end...]
+            }
+            shown += chunk
+            update(shown, true)
+            let pause: UInt64 = chunk.contains(".") || chunk.contains("\n") ? 70_000_000 : UInt64.random(in: 18_000_000...38_000_000)
+            try? await Task.sleep(nanoseconds: pause)
+        }
+        update(full, false)
+    }
+}
+
+/// Conversación con Daemon. El router entiende la intención y las
+/// herramientas miden; la respuesta se redacta en lenguaje natural (con el
+/// LLM si hay API key, o con la voz local de Daemon) y llega «escribiéndose».
 @MainActor
 public final class AgentSession: ObservableObject {
     @Published public private(set) var messages: [ChatMessage] = []
     @Published public private(set) var busy = false
     @Published public private(set) var lastEcosystem: EcosystemSnapshot?
     private let contextProvider: @MainActor () -> AgentContext
+    /// Memoria de la conversación para las preguntas de seguimiento.
+    private var lastIntent: RoutedIntent?
 
     public init(context: @escaping @MainActor () -> AgentContext) {
         self.contextProvider = context
@@ -34,80 +85,146 @@ public final class AgentSession: ObservableObject {
     public func send(_ raw: String) {
         let question = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !busy else { return }
-        messages.append(ChatMessage(role: .neo, text: question, blocks: [], evidence: nil, tools: [], pending: false, engine: ""))
+        messages.append(ChatMessage(role: .neo, text: question))
         let context = contextProvider()
-        let routed = IntentRouter.route(question, repositories: context.repositories.map(\.name))
-        let history = messages.dropLast().suffix(8).map { (role: $0.role == .neo ? "user" : "assistant", text: $0.text) }
-        start { [weak self] in
-            await self?.answer(question, routed: routed, context: context, history: Array(history)) ?? ToolOutcome(text: "")
+        let names = context.repositories.map(\.name)
+        var routed = IntentRouter.route(question, repositories: names)
+        if routed == nil || (routed?.tool == "repo.status" && lastIntent != nil && IntentRouter.isFollowUp(question)) {
+            routed = IntentRouter.followUp(question, previous: lastIntent, repositories: names) ?? routed
         }
+        if let routed { lastIntent = routed }
+        let history = messages.dropLast().suffix(10).map { (role: $0.role == .neo ? "user" : "assistant", text: $0.text) }
+        let index = beginReply()
+        Task { await self.answer(question, routed: routed, context: context, history: Array(history), index: index) }
     }
 
     /// Ejecuta una acción contextual pulsada por Neo (cuenta como aprobación).
     public func perform(_ action: AgentAction) {
         guard !busy else { return }
-        messages.append(ChatMessage(role: .neo, text: "▸ \(action.title)", blocks: [], evidence: nil, tools: [], pending: false, engine: ""))
+        messages.append(ChatMessage(role: .neo, text: action.title))
         let context = contextProvider()
-        start { await ToolExecutor.run(action.tool, arguments: action.arguments, context: context, approval: .userConfirmed) }
-    }
-
-    public func clear() { messages.removeAll() }
-
-    private func start(_ work: @escaping @Sendable () async -> ToolOutcome) {
-        busy = true
-        messages.append(ChatMessage(role: .daemon, text: "midiendo…", blocks: [], evidence: nil, tools: [], pending: true, engine: ""))
-        let index = messages.count - 1
-        Task { [weak self] in
-            let outcome = await work()
-            guard let self else { return }
-            self.messages[index].text = outcome.text
-            self.messages[index].blocks = outcome.blocks
-            self.messages[index].evidence = outcome.evidence
-            self.messages[index].tools = outcome.toolsUsed
-            self.messages[index].pending = false
-            self.messages[index].engine = outcome.toolsUsed.isEmpty ? "local" : (self.messages[index].engine.isEmpty ? "local" : self.messages[index].engine)
-            for block in outcome.blocks { if case .topology(let snapshot) = block { self.lastEcosystem = snapshot } }
-            self.busy = false
-            SoundBoard.shared.play(for: outcome.evidence)
+        let index = beginReply()
+        Task {
+            let outcome = await self.runTool(action.tool, arguments: action.arguments, context: context, approval: .userConfirmed, index: index)
+            await self.finish(index, question: action.title, tool: action.tool, outcome: outcome, history: [])
         }
     }
 
-    nonisolated private func answer(_ question: String, routed: RoutedIntent?, context: AgentContext,
-                                    history: [(role: String, text: String)]) async -> ToolOutcome {
+    public func clear() { messages.removeAll(); lastIntent = nil }
+
+    // MARK: - Ciclo de respuesta
+
+    private func beginReply() -> Int {
+        busy = true
+        var message = ChatMessage(role: .daemon, text: "", pending: true)
+        message.trace = [TraceStep(label: "Leyendo la pregunta", detail: "", state: .running)]
+        messages.append(message)
+        return messages.count - 1
+    }
+
+    private func setTrace(_ index: Int, _ change: (inout [TraceStep]) -> Void) {
+        guard messages.indices.contains(index) else { return }
+        change(&messages[index].trace)
+    }
+
+    private func runTool(_ tool: String, arguments: [String: String], context: AgentContext, approval: ExecutionApproval, index: Int) async -> ToolOutcome {
+        let spec = ToolCatalog.spec(tool)
+        setTrace(index) { trace in
+            if let first = trace.indices.first, trace[first].state == .running { trace[first].state = .done }
+            let args = arguments.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+            trace.append(TraceStep(label: tool + (args.isEmpty ? "" : " · " + args), detail: spec?.technology ?? "", state: .running))
+        }
+        let started = Date()
+        let outcome = await ToolExecutor.run(tool, arguments: arguments, context: context, approval: approval)
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        setTrace(index) { trace in
+            guard let last = trace.indices.last else { return }
+            trace[last].state = outcome.evidence == .failed ? .failed : .done
+            trace[last].milliseconds = elapsed
+        }
+        for block in outcome.blocks { if case .topology(let snapshot) = block { lastEcosystem = snapshot } }
+        return outcome
+    }
+
+    private func answer(_ question: String, routed: RoutedIntent?, context: AgentContext,
+                        history: [(role: String, text: String)], index: Int) async {
         if let routed, let spec = ToolCatalog.spec(routed.tool) {
-            if spec.risk == .read {
-                return await ToolExecutor.run(routed.tool, arguments: routed.arguments, context: context, approval: .automatic)
-            }
-            if spec.requiresConfirmation || !routed.explicitCommand {
-                var text = spec.requiresConfirmation
-                    ? "«\(spec.description)» es una acción de nivel \(spec.risk.label) que pide confirmación explícita."
-                    : "Puedo hacerlo (\(spec.risk.label)). Pídemelo con una orden o pulsa el botón."
+            let needsButton = spec.risk != .read && (spec.requiresConfirmation || !routed.explicitCommand)
+            if needsButton {
+                setTrace(index) { $0[0].state = .done }
+                var outcome = ToolOutcome(text: "", blocks: [.actions([AgentAction(title: spec.description, tool: spec.name, arguments: routed.arguments)])],
+                                          evidence: .unverified, toolsUsed: [])
                 if routed.tool == "neon.health", let cached = DaemonStore.read(NeonReport.self, from: "snapshots/neon.json") {
-                    text += " Último diagnóstico: \(cached.ok == true ? "correcto" : (cached.errorCode ?? "incompleto")) · \(cached.durationMs) ms · \(DaemonClock.relative(cached.provenance.observedAt))."
+                    outcome.text = "último diagnóstico: \(cached.ok == true ? "correcto" : (cached.errorCode ?? "incompleto")), \(cached.durationMs) ms, \(DaemonClock.relative(cached.provenance.observedAt))"
                 }
-                return ToolOutcome(text: text, blocks: [.actions([AgentAction(title: spec.description, tool: spec.name, arguments: routed.arguments)])],
-                                   evidence: .unverified)
+                await finish(index, question: question, tool: routed.tool, outcome: outcome, history: history, proposal: spec)
+                return
             }
-            return await ToolExecutor.run(routed.tool, arguments: routed.arguments, context: context, approval: .userConfirmed)
+            let outcome = await runTool(routed.tool, arguments: routed.arguments, context: context,
+                                        approval: spec.risk == .read ? .automatic : .userConfirmed, index: index)
+            await finish(index, question: question, tool: routed.tool, outcome: outcome, history: history)
+            return
         }
         if AgentKeychain.configured {
+            setTrace(index) { trace in
+                trace[0].state = .done
+                trace.append(TraceStep(label: "Razonando con \(AgentSettings.model)", detail: "solo herramientas de lectura", state: .running))
+            }
             let digest = await RepositoryIndex.shared.digest(for: context.repositories)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let digestText = (try? encoder.encode(digest)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             let ecosystemText = context.ecosystem.map(Self.compact) ?? "sin observación"
+            var outcome: ToolOutcome
             do {
-                var outcome = try await ClaudeAgent.respond(to: question, history: history, context: context, digest: digestText, ecosystem: ecosystemText)
+                outcome = try await ClaudeAgent.respond(to: question, history: history, context: context, digest: digestText, ecosystem: ecosystemText)
                 outcome.toolsUsed.insert("llm:\(AgentSettings.model)", at: 0)
-                return outcome
             } catch {
-                return ToolOutcome(text: "El adaptador LLM falló (\(error.localizedDescription)). Sigo en modo local: prueba con una pregunta concreta sobre repos, puertos, red, choisys o el Cubo.", evidence: .unverified)
+                outcome = ToolOutcome(text: "No llego al modelo (\(error.localizedDescription)). Sigo en local: pregúntame algo concreto sobre repos, puertos, red, choisys o el Cubo.", evidence: .unverified)
+            }
+            setTrace(index) { trace in if let last = trace.indices.last { trace[last].state = .done } }
+            await finish(index, question: question, tool: nil, outcome: outcome, history: history, alreadyPhrased: true)
+            return
+        }
+        setTrace(index) { $0[0].state = .done }
+        let overview = await runTool("repo.list", arguments: [:], context: context, approval: .automatic, index: index)
+        await finish(index, question: question, tool: nil, outcome: overview, history: history)
+    }
+
+    /// Redacta y «escribe» la respuesta final.
+    private func finish(_ index: Int, question: String, tool: String?, outcome: ToolOutcome, history: [(role: String, text: String)],
+                        proposal: ToolSpec? = nil, alreadyPhrased: Bool = false) async {
+        guard messages.indices.contains(index) else { busy = false; return }
+        messages[index].pending = false
+        messages[index].streaming = true
+        messages[index].evidence = proposal == nil ? outcome.evidence : nil
+        messages[index].tools = outcome.toolsUsed
+        if !alreadyPhrased && AgentKeychain.configured && proposal == nil {
+            // Voz del LLM sobre resultados medidos, en streaming real.
+            messages[index].engine = AgentSettings.model
+            do {
+                let stream = ClaudeAgent.composeStream(question: question, history: history, toolName: tool ?? "", outcome: outcome)
+                for try await chunk in stream {
+                    messages[index].text += chunk
+                }
+            } catch {
+                messages[index].text = ""
             }
         }
-        var outcome = await ToolExecutor.run("repo.list", context: context, approval: .automatic)
-        outcome.text = "No reconozco una herramienta para eso y no hay LLM configurado, así que no voy a improvisar. Esto es lo que sí sé medido: " + outcome.text +
-            "\nPrueba: «¿cómo está choisys?», «¿qué proceso usa 8081?», «comprueba la tailnet», «¿qué ha cambiado hoy?», «ejecuta los tests de daemon-core»."
-        return outcome
+        if messages[index].text.isEmpty {
+            let full = alreadyPhrased ? outcome.text : DaemonVoice.compose(question: question, tool: tool, outcome: outcome, proposal: proposal)
+            messages[index].engine = alreadyPhrased ? AgentSettings.model : "local"
+            await Typewriter.reveal(full) { [weak self] shown, _ in
+                guard let self, self.messages.indices.contains(index) else { return }
+                self.messages[index].text = shown
+            }
+        }
+        withAnimation(.easeOut(duration: 0.3)) {
+            messages[index].blocks = outcome.blocks
+            messages[index].streaming = false
+        }
+        busy = false
+        if proposal == nil { SoundBoard.shared.play(for: outcome.evidence) }
     }
 
     nonisolated static func compact(_ snapshot: EcosystemSnapshot) -> String {

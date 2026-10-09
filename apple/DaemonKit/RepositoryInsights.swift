@@ -31,7 +31,8 @@ public struct RepositoryInsights: Sendable, Codable {
 
 public enum RepositoryInspector {
     private static let ignoredDirectories: Set<String> = [
-        ".git", ".build", "build", "dist", "node_modules", ".next", "Pods", "DerivedData", ".expo"
+        ".git", ".build", "build", "dist", "node_modules", ".next", "Pods", "DerivedData", ".expo",
+        "coverage", ".turbo", "vendor", "target", "out", "web-build", ".gradle", ".cache", "tmp"
     ]
 
     private static let languageByExtension: [String: String] = [
@@ -43,7 +44,9 @@ public enum RepositoryInspector {
 
     public static func inspect(path: String) -> RepositoryInsights {
         let root = URL(fileURLWithPath: path, isDirectory: true)
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .totalFileAllocatedSizeKey]
+        let deadline = Date().addingTimeInterval(10)
+        var visited = 0
         let manager = FileManager.default
         guard let enumerator = manager.enumerator(
             at: root,
@@ -60,8 +63,12 @@ public enum RepositoryInspector {
         var relativePaths = Set<String>()
         var testFiles = 0
         var sizes: [(String, Int)] = []
+        var bytesRead = 0
 
         for case let url as URL in enumerator {
+            // Presupuesto: un repo patológico no puede bloquear al agente.
+            visited += 1
+            if visited > 60_000 || (visited % 200 == 0 && Date() > deadline) { break }
             if ignoredDirectories.contains(url.lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
@@ -78,10 +85,13 @@ public enum RepositoryInspector {
             sizes.append((relative, values.fileSize ?? 0))
             guard let language = languageByExtension[url.pathExtension.lowercased()] else { continue }
             languageCounts[language, default: 0] += 1
-            if (values.fileSize ?? 0) <= 1_000_000,
-               let data = try? Data(contentsOf: url),
-               let text = String(data: data, encoding: .utf8) {
-                lines += text.reduce(into: 1) { if $1 == "\n" { $0 += 1 } }
+            // Conteo de líneas sobre bytes (rápido) con presupuesto total de lectura.
+            // Archivos sin datos locales (iCloud «solo en la nube») no se descargan para contarlos.
+            let local = (values.totalFileAllocatedSize ?? 1) > 0 || (values.fileSize ?? 0) == 0
+            if local, (values.fileSize ?? 0) <= 1_000_000, bytesRead < 80_000_000,
+               let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
+                bytesRead += data.count
+                lines += data.withUnsafeBytes { raw in raw.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 } }
             }
         }
 
