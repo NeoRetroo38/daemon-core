@@ -27,7 +27,7 @@ swift_flags=(-swift-version 6 -sdk "$apple_sdk" -target "$arch_name-apple-macosx
     -module-cache-path "$out_path/module-cache" -I apple/CoreHeaders -I "$out_path" -L "$out_path")
 xcrun swiftc "${swift_flags[@]}" -O -parse-as-library -emit-library -static -emit-module \
     -module-name DaemonKit -emit-module-path "$out_path/DaemonKit.swiftmodule" \
-    apple/DaemonKit/*.swift -o "$out_path/libDaemonKit.a"
+    $(find apple/DaemonKit -name '*.swift' | sort) -o "$out_path/libDaemonKit.a"
 xcrun swiftc "${swift_flags[@]}" -O -parse-as-library -emit-executable -module-name DaemonMac \
     apple/DaemonMac/DaemonMacApp.swift -lDaemonKit -lDaemonNativeCore -lc++ -o "$out_path/DaemonMac"
 xcrun swiftc "${swift_flags[@]}" -O -parse-as-library -emit-executable -module-name DaemonBridgeChecks \

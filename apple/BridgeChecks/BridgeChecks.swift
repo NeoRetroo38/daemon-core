@@ -29,7 +29,7 @@ struct BridgeChecks {
         var oversizedRejected = false
         do { _ = try DaemonSnapshot.decode(Data(repeating: 32, count: 4 * 1024 * 1024 + 1)) } catch { oversizedRejected = true }
         try check(oversizedRejected, "oversized import rejected")
-        try check(CoreBridge.version == "0.1.0", "C ABI version")
+        try check(CoreBridge.version == "0.2.0", "C ABI version")
         for _ in 0..<20 {
             let value = try CoreBridge.snapshot(repositoryPath: "/daemon-native-test-path-that-does-not-exist")
             guard value.schemaVersion == 1, value.verifiedRepositories == 0, !value.allowsRemoteControl else {

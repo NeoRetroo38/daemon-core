@@ -1,258 +1,227 @@
-import SceneKit
+#if os(macOS)
 import SwiftUI
 
+/// Espacio de trabajo por repositorio, alimentado por el índice local.
 public struct RepositoryWorkspaceView: View {
     public let repository: RepositorySnapshot
-    @State private var insights: RepositoryInsights = .empty
-    @State private var loading = true
+    let allRepositories: [RepositorySnapshot]
+    let session: AgentSession
+    let liveServices: (String) -> Int?
+    @State private var record: RepositoryRecord?
+    @State private var others: [String: RepositoryRecord] = [:]
+    @State private var comparing: Set<String> = []
     @State private var diagnosticStates: [String: DiagnosticState] = [:]
     @State private var selectedTab = "Métricas"
+    @State private var refreshing = false
 
-    public init(repository: RepositorySnapshot) { self.repository = repository }
+    public init(repository: RepositorySnapshot, allRepositories: [RepositorySnapshot], session: AgentSession, liveServices: @escaping (String) -> Int?) {
+        self.repository = repository
+        self.allRepositories = allRepositories
+        self.session = session
+        self.liveServices = liveServices
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(repository.name).font(.system(size: 30, weight: .light))
-                    Text(repository.path).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            header
+            HStack(spacing: 0) {
+                ForEach(["Métricas", "Git", "Cubo 3D", "Pruebas"], id: \.self) { tab in
+                    Button { selectedTab = tab } label: {
+                        VStack(spacing: 6) {
+                            Text(tab.uppercased()).font(DaemonFont.label).tracking(1.4)
+                                .foregroundStyle(selectedTab == tab ? DaemonPalette.ink : DaemonPalette.dim)
+                            Rectangle().fill(selectedTab == tab ? DaemonPalette.green : Color.clear).frame(height: 2)
+                        }.padding(.trailing, 22)
+                    }.buttonStyle(.plain)
                 }
                 Spacer()
-                EvidenceBadge(repository.evidence)
             }
-            Picker("Vista", selection: $selectedTab) {
-                ForEach(["Métricas", "Pruebas", "Mapa 3D", "Agente"], id: \.self) { Text($0).tag($0) }
-            }.pickerStyle(.segmented)
-
             Group {
                 switch selectedTab {
+                case "Git": git
+                case "Cubo 3D": cube
                 case "Pruebas": diagnostics
-                case "Mapa 3D": RepositorySceneView(insights: insights)
-                case "Agente": ProjectAgentView(repository: repository, insights: insights)
                 default: metrics
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .task(id: repository.path) {
-            loading = true
-            insights = await Task.detached { RepositoryInspector.inspect(path: repository.path) }.value
-            loading = false
-        }
+        .task(id: repository.path + (repository.head ?? "")) { await load(force: false) }
     }
 
-    private var metrics: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 10) {
-                    metric("ARCHIVOS", loading ? "…" : "\(insights.fileCount)")
-                    metric("LÍNEAS", loading ? "…" : insights.sourceLines.formatted())
-                    metric("TAMAÑO", ByteCountFormatter.string(fromByteCount: insights.bytes, countStyle: .file))
-                    metric("ESTADO", repository.workingTreeLabel)
-                }
-                panel("Tecnologías detectadas") {
-                    FlowLayout(items: insights.capabilities)
-                }
-                panel("Distribución del código") {
-                    VStack(spacing: 10) {
-                        ForEach(insights.languages) { language in
-                            HStack {
-                                Text(language.name).frame(width: 100, alignment: .leading)
-                                GeometryReader { proxy in
-                                    let maximum = max(insights.languages.first?.files ?? 1, 1)
-                                    Capsule().fill(DaemonPalette.green.opacity(0.75))
-                                        .frame(width: proxy.size.width * CGFloat(language.files) / CGFloat(maximum), height: 8)
-                                }.frame(height: 8)
-                                Text("\(language.files)").font(.caption.monospaced()).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                if insights.hasLogin && insights.hasDatabase {
-                    panel("Registros de usuario · datos minimizados") {
-                        if insights.usernames.isEmpty {
-                            Text("Login y base de datos detectados. No hay nombres disponibles en el almacén local autorizado.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(insights.usernames, id: \.self) { username in
-                                    Label(username, systemImage: "person.crop.circle")
-                                        .font(.system(.body, design: .rounded))
-                                }
-                            }
-                        }
-                        Text("Solo se lee displayName; Daemon descarta correo, identificadores, roles, hashes y sesiones.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-                panel("Estudio creativo local") {
-                    HStack(spacing: 24) {
-                        capability("Blender", available: insights.blenderAvailable, purpose: "modelado y exportación 3D")
-                        capability("Ableton Live Lite", available: insights.abletonAvailable, purpose: "audio reactivo y diseño sonoro")
-                    }
-                }
-            }
-        }
+    func load(force: Bool) async {
+        refreshing = true
+        record = await RepositoryIndex.shared.record(for: repository, force: force)
+        refreshing = false
     }
 
-    private var diagnostics: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Pruebas de solo lectura").font(.title2.weight(.light))
-                Text("No ejecutan shell, no escriben archivos y las sondas de red están limitadas a loopback.")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(DiagnosticCatalog.diagnostics(for: repository.path)) { diagnostic in
-                    HStack(spacing: 14) {
-                        Image(systemName: "checkmark.shield").foregroundStyle(DaemonPalette.green)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(diagnostic.title).font(.headline.weight(.regular))
-                            Text(diagnostic.detail).font(.caption).foregroundStyle(.secondary)
-                            Text(diagnosticStates[diagnostic.id]?.label ?? DiagnosticState.ready.label)
-                                .font(.caption.monospaced()).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Probar") { run(diagnostic) }
-                            .disabled(ifRunning(diagnostic.id))
-                    }
-                    .padding(16).background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(DaemonPalette.line))
-                }
-            }
-        }
-    }
-
-    private func run(_ diagnostic: RepositoryDiagnostic) {
-        diagnosticStates[diagnostic.id] = .running
-        Task { diagnosticStates[diagnostic.id] = await DiagnosticCatalog.run(diagnostic) }
-    }
-
-    private func ifRunning(_ id: String) -> Bool {
-        if case .running? = diagnosticStates[id] { return true }
-        return false
-    }
-
-    private func metric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(label).font(.caption2.monospaced()).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 17, weight: .light, design: .monospaced)).foregroundStyle(DaemonPalette.green).lineLimit(1)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            .background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(DaemonPalette.line))
-    }
-
-    private func panel<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.headline.weight(.regular))
-            content()
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
-            .background(DaemonPalette.panel, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(DaemonPalette.line))
-    }
-
-    private func capability(_ title: String, available: Bool, purpose: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(title, systemImage: available ? "checkmark.circle.fill" : "circle.dashed")
-                .foregroundStyle(available ? DaemonPalette.green : .secondary)
-            Text(available ? "Disponible · \(purpose)" : "No detectado en /Applications")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct FlowLayout: View {
-    let items: [String]
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(items, id: \.self) { item in
-                Text(item).font(.caption.monospaced()).padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(DaemonPalette.green.opacity(0.1), in: Capsule())
-                    .overlay(Capsule().stroke(DaemonPalette.green.opacity(0.35)))
-            }
-        }
-    }
-}
-
-public struct RepositorySceneView: View {
-    public let insights: RepositoryInsights
-    public init(insights: RepositoryInsights) { self.insights = insights }
-
-    public var body: some View {
-        ZStack(alignment: .topLeading) {
-            SceneView(scene: scene, options: [.allowsCameraControl, .autoenablesDefaultLighting])
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 8) {
-                Text("CUBO DE MÉTRICAS").font(.caption.monospaced()).foregroundStyle(DaemonPalette.green)
-                Text("Código × Git × Operación").font(.title3.weight(.light)).foregroundStyle(.white)
-                Text("27 celdas · densidad conjunta del repositorio").font(.caption).foregroundStyle(.white.opacity(0.65))
+    var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(repository.name).font(DaemonFont.title)
                 Spacer()
-                HStack(spacing: 14) {
-                    legend("Código", value: codeScore)
-                    legend("Git", value: gitScore)
-                    legend("Operación", value: operationScore)
+                EvidenceTag(repository.evidence == .verified ? .verified : .unverified)
+            }
+            HStack(spacing: 18) {
+                Text(repository.branch ?? "rama no verificada").font(DaemonFont.mono).foregroundStyle(DaemonPalette.green)
+                Text(repository.head.map { String($0.prefix(10)) } ?? "—").font(DaemonFont.mono).foregroundStyle(DaemonPalette.dim)
+                Text(repository.workingTreeLabel).font(DaemonFont.mono).foregroundStyle(repository.dirty == true ? DaemonPalette.amber : DaemonPalette.dim)
+                Text(repository.comparisonLabel).font(DaemonFont.mono).foregroundStyle(DaemonPalette.dim)
+                Spacer()
+                if let record {
+                    Text(record.reused ? "índice reutilizado · \(DaemonClock.relative(record.scannedAt))" : "escaneado en \(record.scanMs) ms")
+                        .font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
                 }
-                Text("Arrastra para orbitar · pellizca para ampliar")
-                    .font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.6))
-            }.padding(18)
-        }.background(DaemonPalette.panel).clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var codeScore: Int { min(100, max(8, insights.sourceLines / 120)) }
-    private var gitScore: Int { min(100, max(12, insights.fileCount / 2)) }
-    private var operationScore: Int {
-        min(100, insights.capabilities.count * 18 + (insights.hasDatabase ? 18 : 0) + (insights.hasLogin ? 14 : 0))
-    }
-
-    private func legend(_ title: String, value: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.white.opacity(0.65))
-            Text("\(value)%").font(.caption.monospaced().weight(.semibold)).foregroundStyle(.white)
+                Button(refreshing ? "LEYENDO" : "REESCANEAR") { Task { await load(force: true) } }
+                    .buttonStyle(.plain).font(DaemonFont.label).foregroundStyle(DaemonPalette.dim).disabled(refreshing)
+            }
+            Text(repository.path).font(DaemonFont.label).foregroundStyle(DaemonPalette.faint).textSelection(.enabled)
         }
     }
 
-    private var scene: SCNScene {
-        let scene = SCNScene()
-        scene.background.contents = NSColor.black
-        let scores = [codeScore, gitScore, operationScore]
-        let combined = max(1, scores.reduce(0, +) / scores.count)
-        for x in 0..<3 {
-            for y in 0..<3 {
-                for z in 0..<3 {
-                    let threshold = ((x + 1) * scores[0] + (y + 1) * scores[1] + (z + 1) * scores[2]) / 9
-                    let active = threshold <= combined
-                    let box = SCNBox(width: 0.68, height: 0.68, length: 0.68, chamferRadius: 0.075)
-                    let material = SCNMaterial()
-                    let energy = CGFloat(scores[(x + y + z) % 3]) / 100
-                    material.diffuse.contents = NSColor(calibratedRed: 0.12 + energy * 0.12, green: active ? 0.78 + energy * 0.22 : 0.18, blue: 0.58 + energy * 0.32, alpha: active ? 0.86 : 0.16)
-                    material.emission.contents = NSColor(calibratedRed: 0.02, green: active ? 0.17 + energy * 0.18 : 0.02, blue: active ? 0.15 : 0.04, alpha: 1)
-                    material.transparency = active ? 0.92 : 0.28
-                    material.metalness.contents = 0.35
-                    material.roughness.contents = 0.28
-                    box.materials = [material]
-                    let node = SCNNode(geometry: box)
-                    node.position = SCNVector3(Float(x - 1) * 0.88, Float(y) * 0.88 + 0.36, Float(z - 1) * 0.88)
-                    scene.rootNode.addChildNode(node)
+    var metrics: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let record {
+                let scan = Provenance(source: record.reused ? "índice local" : "escaneo local", method: "FileManager", observedAt: record.scannedAt)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                    Readout(Metric(id: "files", label: "Archivos", value: Double(record.insights.fileCount), provenance: scan))
+                    Readout(Metric(id: "lines", label: "Líneas", value: Double(record.insights.sourceLines), display: record.insights.sourceLines.formatted(), provenance: scan))
+                    Readout(Metric(id: "size", label: "Tamaño", value: Double(record.insights.bytes), display: ByteCountFormatter.string(fromByteCount: record.insights.bytes, countStyle: .file), provenance: scan))
+                    Readout(Metric(id: "tests", label: "Archivos de test", value: Double(record.insights.testFiles), provenance: scan))
+                    Readout(Metric(id: "commits", label: "Commits", value: record.git.commitCount.map(Double.init), provenance: record.git.provenance))
+                    Readout(Metric(id: "week", label: "Commits 7 días", value: record.git.commitsLast7Days.map(Double.init), provenance: record.git.provenance))
+                    Readout(Metric(id: "branches", label: "Ramas", value: record.git.branchCount.map(Double.init), provenance: record.git.provenance))
+                    Readout(Metric(id: "changed", label: "Cambios locales", value: Double(record.git.workingChanges.count + (record.git.untrackedCount ?? 0)), provenance: record.git.provenance))
+                }
+                HStack(alignment: .top, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionHeader("LENGUAJES", trailing: "archivos")
+                        ForEach(record.insights.languages) { language in
+                            HStack {
+                                Text(language.name).font(DaemonFont.monoSmall).frame(width: 90, alignment: .leading)
+                                GeometryReader { proxy in
+                                    let maximum = max(record.insights.languages.first?.files ?? 1, 1)
+                                    Rectangle().fill(DaemonPalette.green.opacity(0.7)).frame(width: proxy.size.width * CGFloat(language.files) / CGFloat(maximum), height: 4)
+                                        .frame(maxHeight: .infinity, alignment: .center)
+                                }.frame(height: 10)
+                                Text("\(language.files)").font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.dim).frame(width: 40, alignment: .trailing)
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionHeader("STACK")
+                        FlowTags(items: record.insights.capabilities + record.insights.packageManagers)
+                        SectionHeader("BUILD / TEST")
+                        ForEach(record.insights.buildCommands, id: \.self) { Text($0).font(DaemonFont.monoSmall) }
+                        SectionHeader("ARCHIVOS MÁS GRANDES")
+                        ForEach(record.insights.largestFiles, id: \.self) { Text($0).font(DaemonFont.label).foregroundStyle(DaemonPalette.dim).lineLimit(1).truncationMode(.middle) }
+                    }
+                }
+                if record.insights.hasLogin && record.insights.hasDatabase {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SectionHeader("USUARIOS", "datos minimizados")
+                        Text(record.insights.usernames.isEmpty ? "Login y base de datos detectados. Sin nombres en el almacén local autorizado." : record.insights.usernames.joined(separator: " · "))
+                            .font(DaemonFont.monoSmall)
+                        Text("Solo displayName; correo, IDs, roles, hashes y sesiones se descartan.").font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+                    }
+                }
+            } else {
+                ProgressView("Leyendo el índice local…").frame(maxWidth: .infinity, minHeight: 200)
+            }
+        }
+    }
+
+    var git: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let record {
+                if !record.git.workingChanges.isEmpty { BlockView(block: .changes(record.git.workingChanges), perform: { session.perform($0) }, config: .standard, liveServices: liveServices) }
+                CommitTimeline(commits: record.git.recent, title: "recientes")
+                if let github = record.github {
+                    BlockView(block: .pullRequests(github.pullRequests, slug: github.slug), perform: { session.perform($0) }, config: .standard, liveServices: liveServices)
+                    Text("GitHub · \(DaemonClock.relative(github.provenance.observedAt)) · \(github.evidence.label)").font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+                }
+                HStack(spacing: 8) {
+                    ActionButton(action: AgentAction(title: "Consultar PRs", tool: "github.prs", arguments: ["repo": repository.name])) { ask("¿Qué PRs tiene \(repository.name)?") }
+                    ActionButton(action: AgentAction(title: "Ver diff", tool: "repo.diff", arguments: ["repo": repository.name])) { ask("Muéstrame el diff de \(repository.name)") }
                 }
             }
         }
-        let floor = SCNFloor()
-        floor.reflectivity = 0.22
-        floor.firstMaterial?.diffuse.contents = NSColor(calibratedWhite: 0.04, alpha: 1)
-        scene.rootNode.addChildNode(SCNNode(geometry: floor))
-        let camera = SCNNode()
-        camera.camera = SCNCamera()
-        camera.camera?.fieldOfView = 44
-        camera.position = SCNVector3(4.8, 4.4, 6.8)
-        let constraint = SCNLookAtConstraint(target: scene.rootNode)
-        constraint.isGimbalLockEnabled = true
-        camera.constraints = [constraint]
-        scene.rootNode.addChildNode(camera)
-        let light = SCNNode()
-        light.light = SCNLight()
-        light.light?.type = .omni
-        light.light?.color = NSColor(calibratedRed: 0.35, green: 0.9, blue: 1, alpha: 1)
-        light.light?.intensity = 900
-        light.position = SCNVector3(-3, 6, 4)
-        scene.rootNode.addChildNode(light)
-        return scene
+    }
+
+    var cube: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let record {
+                let runs = [CubeModel.run(record: record, repository: repository, liveServices: liveServices(repository.name))] +
+                    allRepositories.filter { comparing.contains($0.path) }.compactMap { other in
+                        others[other.path].map { CubeModel.run(record: $0, repository: other, liveServices: liveServices(other.name)) }
+                    }
+                MetricCubePanel(runs: runs, height: 470)
+                HStack(spacing: 8) {
+                    Text("COMPARAR").font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
+                    ForEach(allRepositories.filter { $0.path != repository.path }) { other in
+                        let on = comparing.contains(other.path)
+                        Button(other.name) {
+                            if on { comparing.remove(other.path) } else {
+                                comparing.insert(other.path)
+                                Task { others[other.path] = await RepositoryIndex.shared.record(for: other) }
+                            }
+                        }
+                        .buttonStyle(.plain).font(DaemonFont.monoSmall)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .foregroundStyle(on ? Color.black : DaemonPalette.ink).background(on ? DaemonPalette.green : Color.clear)
+                        .overlay(Rectangle().stroke(DaemonPalette.line))
+                    }
+                }
+                Text("Cada repositorio es un recorrido de 3 fases. Fila y columna son niveles 1–3 de dos métricas por fase; los umbrales y la procedencia aparecen al seleccionar un punto.")
+                    .font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+            }
+        }
+    }
+
+    var diagnostics: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader("PRUEBAS", "estructura y sondas")
+            ForEach(DiagnosticCatalog.diagnostics(for: repository.path)) { diagnostic in
+                HStack(spacing: 14) {
+                    StatusDot(state(diagnosticStates[diagnostic.id]))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(diagnostic.title).font(.system(size: 13))
+                        Text(diagnostic.detail).font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
+                    }
+                    Spacer()
+                    Text(diagnosticStates[diagnostic.id]?.label ?? DiagnosticState.ready.label).font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.dim)
+                    Button("PROBAR") {
+                        diagnosticStates[diagnostic.id] = .running
+                        Task { diagnosticStates[diagnostic.id] = await DiagnosticCatalog.run(diagnostic) }
+                    }.buttonStyle(.plain).font(DaemonFont.label).foregroundStyle(DaemonPalette.green)
+                }
+                .padding(.vertical, 8)
+                Rectangle().fill(DaemonPalette.grid).frame(height: 1)
+            }
+            HStack {
+                ActionButton(action: AgentAction(title: "Ejecutar la batería de tests", tool: "repo.tests", arguments: ["repo": repository.name])) {
+                    ask("Ejecuta los tests de \(repository.name)")
+                }
+                Text("Se ejecuta desde el chat de Daemon para que quede el registro.").font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+            }.padding(.top, 8)
+        }
+    }
+
+    func state(_ value: DiagnosticState?) -> Evidence {
+        switch value {
+        case .passed?: .verified
+        case .failed?: .failed
+        default: .unverified
+        }
+    }
+
+    func ask(_ text: String) {
+        session.send(text)
+        NotificationCenter.default.post(name: .daemonShowAgent, object: nil)
     }
 }
+
+extension Notification.Name {
+    public static let daemonShowAgent = Notification.Name("daemon.showAgent")
+}
+#endif

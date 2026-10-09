@@ -53,13 +53,13 @@ vista mantiene cuatro superficies locales y de solo lectura:
 - **Identidades mínimas:** si el repositorio contiene login y persistencia,
   Daemon puede proyectar exclusivamente `displayName` desde el almacén local
   autorizado. Correo, IDs, roles, hashes, sesiones y credenciales se descartan.
-- **Agente:** Nexo conserva una identidad fija y recibe el snapshot y las
-  métricas del repositorio seleccionado. La versión actual responde y propone;
-  no edita archivos ni ejecuta implementaciones.
+- **Agente:** Daemon conserva una identidad fija y responde con herramientas
+  declaradas y datos medidos. Ver [CONTROL_PLANE.md](CONTROL_PLANE.md) para el
+  motor de herramientas, los niveles de acción, Clod y Cube Link.
 
-El modo de solo lectura es una propiedad funcional, no solo una etiqueta de UI.
-La futura ejecución de código necesitará un contrato separado de propuesta,
-diff, aprobación explícita, ejecución acotada y verificación.
+Desde oct. 2026 la ejecución ya no es solo lectura: toda acción pasa por el
+catálogo de herramientas y por `daemon_policy_evaluate` en el núcleo C++, con
+niveles READ / WRITE / SERVICE / NETWORK / DESTRUCTIVE (ver CONTROL_PLANE.md).
 
 La UI puede representar estas fases desde el mismo esquema, pero cada tarjeta
 debe mostrar `verificado`, `no disponible` o `no verificado` y la hora de la

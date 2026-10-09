@@ -66,7 +66,7 @@ void traceAndJsonTests() {
     require(json.find("name\\\"\\\\\\n") != std::string::npos, "JSON escaping");
     require(json.find("\"dirty\":null") != std::string::npos, "unknown not clean");
     require(json.find("\"services\":[]") != std::string::npos && json.find("\"agents\":[]") != std::string::npos, "no invented services/agents");
-    require(std::strcmp(daemon_core_version(), "0.1.0") == 0, "ABI version");
+    require(std::strcmp(daemon_core_version(), "0.2.0") == 0, "ABI version");
     char* invalid = daemon_snapshot_json(nullptr);
     require(invalid && std::strstr(invalid, "EXPLICIT_REPOSITORY_REQUIRED"), "ABI handles explicit path error");
     daemon_free_string(invalid);
@@ -78,6 +78,34 @@ void traceAndJsonTests() {
     require(empty && std::strstr(empty, "\"repositories\":[]"), "ABI accepts an empty explicit catalog");
     daemon_free_string(empty);
     daemon_free_string(nullptr);
+}
+
+void bridgeToolTests() {
+    const char* readArguments[] = {"status", "--json"};
+    char* allow = daemon_policy_evaluate("/Applications/Tailscale.app/Contents/MacOS/Tailscale", readArguments, 2, 0, 0);
+    require(allow && std::strstr(allow, "\"verdict\":\"allow\"") && std::strstr(allow, "READ_ONLY"), "ABI policy allows narrow read");
+    daemon_free_string(allow);
+    const char* forceArguments[] = {"push", "--force"};
+    char* deny = daemon_policy_evaluate("git", forceArguments, 2, 1, 1);
+    require(deny && std::strstr(deny, "\"verdict\":\"deny\"") && std::strstr(deny, "GIT_FORCE_PUSH_DENIED"), "ABI policy keeps permanent denials");
+    daemon_free_string(deny);
+    char* nullExecutable = daemon_policy_evaluate(nullptr, nullptr, 0, 1, 1);
+    require(nullExecutable && std::strstr(nullExecutable, "deny"), "ABI policy denies a missing executable");
+    daemon_free_string(nullExecutable);
+    const char* addresses[] = {"127.0.0.1", "0.0.0.0"};
+    const unsigned short ports[] = {8765, 8765};
+    char* exposed = daemon_check_exposure(addresses, ports, 2, 1);
+    require(exposed && std::strstr(exposed, "EXPOSED"), "ABI exposure detects wildcard binding");
+    daemon_free_string(exposed);
+    char* safe = daemon_check_exposure(addresses, ports, 1, 1);
+    require(safe && std::strstr(safe, "SAFE"), "ABI exposure accepts complete loopback evidence");
+    daemon_free_string(safe);
+    char* unknown = daemon_check_exposure(nullptr, nullptr, 0, 0);
+    require(unknown && std::strstr(unknown, "UNKNOWN"), "ABI exposure without evidence is unknown");
+    daemon_free_string(unknown);
+    char* redacted = daemon_redact("DATABASE_URL=postgresql://u:synthetic-pass@host/db");
+    require(redacted && !std::strstr(redacted, "synthetic-pass"), "ABI redaction removes credentials");
+    daemon_free_string(redacted);
 }
 
 void processAndGitTests() {
@@ -113,7 +141,7 @@ void processAndGitTests() {
 
 int main() {
     try {
-        policyTests(); daemonx::tests::commandPolicyCases(); daemonx::tests::urlRedactionCases(); daemonx::tests::exposureCases();
+        policyTests(); daemonx::tests::commandPolicyCases(); daemonx::tests::urlRedactionCases(); daemonx::tests::exposureCases(); daemonx::tests::observationToolCases(); bridgeToolTests();
         parserTests(); traceAndJsonTests(); processAndGitTests();
         std::cout << "DAEMON TESTS PASSED: policy, parser, redaction, JSON, C ABI, process bounds and platform behavior\n";
         return 0;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <string_view>
 
 namespace daemonx {
@@ -118,6 +119,161 @@ GitCommand gitCommand(const std::vector<std::string>& arguments) {
     return result;
 }
 
+
+bool inSet(std::string_view value, std::initializer_list<std::string_view> values) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+bool digits(std::string_view value, std::string_view extra = {}) {
+    return !value.empty() && std::all_of(value.begin(), value.end(), [&](char c) {
+        return (c >= '0' && c <= '9') || extra.find(c) != std::string_view::npos;
+    });
+}
+
+bool identifier(std::string_view value, std::string_view extra) {
+    return !value.empty() && value.size() <= 256 && std::all_of(value.begin(), value.end(), [&](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || extra.find(c) != std::string_view::npos;
+    });
+}
+
+// Git reads used by Daemon's repository tools. Options that can run helpers,
+// write files or open pagers are never part of the allowlist.
+bool gitReadAction(const std::vector<std::string>& arguments, std::size_t commandIndex) {
+    const auto& action = arguments[commandIndex];
+    static const std::initializer_list<std::string_view> actions{
+        "log", "rev-list", "branch", "diff", "show", "ls-files", "for-each-ref", "shortlog", "remote", "count-objects"};
+    if (!inSet(action, actions)) return false;
+    if (action == "remote") {
+        // Only `remote get-url <name>`; `remote -v` and mutations are excluded.
+        return arguments.size() == commandIndex + 3 && arguments[commandIndex + 1] == "get-url" &&
+               identifier(arguments[commandIndex + 2], "-_.");
+    }
+    if (action == "branch") {
+        for (std::size_t index = commandIndex + 1; index < arguments.size(); ++index)
+            if (!inSet(arguments[index], {"--list", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--no-color", "--show-current"}) &&
+                !arguments[index].starts_with("--format=") && !arguments[index].starts_with("--sort=")) return false;
+        return true;
+    }
+    bool literalPaths = false;
+    for (std::size_t index = commandIndex + 1; index < arguments.size(); ++index) {
+        const auto& value = arguments[index];
+        if (literalPaths) continue;
+        if (value == "--") { literalPaths = true; continue; }
+        if (!value.starts_with('-')) continue;
+        if (value.starts_with("--output") || value.starts_with("--ext-diff") || value.starts_with("--textconv") ||
+            value.starts_with("--exec") || value.starts_with("-O") || value.starts_with("--open-files-in-pager") ||
+            value.starts_with("--upload-pack") || value == "--help" || value == "-h") return false;
+        static const std::initializer_list<std::string_view> exact{
+            "--no-ext-diff", "--no-textconv", "--no-color", "--stat", "--numstat", "--shortstat", "--name-only",
+            "--name-status", "--oneline", "--no-merges", "--cached", "--staged", "--count", "--left-right",
+            "--all", "-z", "-s", "-n", "-sn", "-v", "--summary", "--reverse", "--date=iso-strict", "--others",
+            "--exclude-standard", "--abbrev-commit", "--no-patch", "--first-parent", "--heads", "--remotes", "-e"};
+        if (inSet(value, exact)) continue;
+        if (value.starts_with("--format=") || value.starts_with("--pretty=format:") || value.starts_with("--since=") ||
+            value.starts_with("--until=") || value.starts_with("--max-count=") || value.starts_with("--sort=") ||
+            value.starts_with("--stat=") || value.starts_with("--date=") || value.starts_with("--count=")) continue;
+        if (value.size() > 1 && value[0] == '-' && digits(std::string_view(value).substr(1))) continue;  // -20
+        return false;
+    }
+    return true;
+}
+
+// Observation programs used by Daemon's system tools. Each one is accepted only
+// with the exact read-only options listed here.
+bool systemRead(std::string_view program, const std::vector<std::string>& arguments) {
+    const auto all = [&](auto predicate) { return std::all_of(arguments.begin(), arguments.end(), predicate); };
+    if (program == "lsof") {
+        return !arguments.empty() && all([](const std::string& value) {
+            return inSet(value, {"-n", "-P", "-nP", "-Pn", "-iTCP", "-iUDP", "-sTCP:LISTEN", "-Fpcn", "-FpcnT", "-FpcnPT", "-Fpcnt", "-w"}) ||
+                   (value.starts_with("-iTCP:") && digits(std::string_view(value).substr(6), ",-"));
+        });
+    }
+    if (program == "ps") {
+        for (std::size_t index = 0; index < arguments.size(); ++index) {
+            const auto& value = arguments[index];
+            if (value == "-ax" || value == "-A" || value == "-ww") continue;
+            if ((value == "-o" || value == "-axo") && index + 1 < arguments.size() && identifier(arguments[index + 1], ",%=_")) { ++index; continue; }
+            if (value == "-p" && index + 1 < arguments.size() && digits(arguments[index + 1], ",")) { ++index; continue; }
+            return false;
+        }
+        return true;
+    }
+    if (program == "tailscale") {
+        if (arguments == std::vector<std::string>{"status", "--json"} || arguments == std::vector<std::string>{"version"} ||
+            arguments == std::vector<std::string>{"ip", "-4"} || arguments == std::vector<std::string>{"ip"}) return true;
+        return false;
+    }
+    if (program == "gh") {
+        if (arguments == std::vector<std::string>{"--version"}) return true;
+        if (arguments.size() < 2) return false;
+        const auto noun = arguments[0], verb = arguments[1];
+        const bool listing = (inSet(noun, {"pr", "issue", "run", "release"}) && verb == "list") ||
+                             (noun == "repo" && verb == "view") || (noun == "auth" && verb == "status");
+        if (!listing) return false;
+        for (std::size_t index = 2; index < arguments.size(); ++index) {
+            const auto& value = arguments[index];
+            if (inSet(value, {"--json", "-R", "--repo", "--limit", "-L", "--state", "-s", "--branch", "-b"}) && index + 1 < arguments.size() &&
+                identifier(arguments[index + 1], ",-_./")) { ++index; continue; }
+            if (value == "--hostname" && index + 1 < arguments.size() && arguments[index + 1] == "github.com") { ++index; continue; }
+            if (noun == "repo" && index == 2 && identifier(value, "-_./")) continue;
+            return false;
+        }
+        return true;
+    }
+    if (program == "sw_vers" || program == "uname" || program == "vm_stat" || program == "uptime") {
+        return all([](const std::string& value) { return value.size() <= 32 && identifier(value, "-"); });
+    }
+    if (program == "sysctl") {
+        return !arguments.empty() && all([](const std::string& value) {
+            return value == "-n" || (identifier(value, "._") && value.find('=') == std::string::npos && value != "-w");
+        });
+    }
+    if (program == "df") return all([](const std::string& value) { return inSet(value, {"-k", "-h", "-P", "/"}); });
+    if (program == "pmset") return arguments == std::vector<std::string>{"-g", "batt"};
+    if (program == "brew") {
+        return arguments == std::vector<std::string>{"list", "--versions"} ||
+               arguments == std::vector<std::string>{"info", "--json=v2", "--installed"} ||
+               arguments == std::vector<std::string>{"--version"};
+    }
+    // `<tool> --version` probes for the toolchain inventory.
+    static const std::initializer_list<std::string_view> versioned{
+        "node", "npm", "swift", "clang", "clang++", "cmake", "make", "jq", "openssl", "python3", "docker",
+        "psql", "code", "blender", "xcodebuild", "xcode-select", "ssh", "curl", "tailscale", "gh", "git", "npx", "c++"};
+    if (inSet(program, versioned) && arguments.size() == 1 &&
+        inSet(arguments[0], {"--version", "-version", "-V", "version", "-p", "--print-path"})) return true;
+    return false;
+}
+
+// SSH is only a transport for private tunnels. Execution hooks, gateway
+// forwarding and local binds outside loopback are never allowed.
+PolicyDecision sshDecision(const std::vector<std::string>& arguments, const PolicyRules& rules) {
+    const auto make = [](PolicyVerdict verdict, const char* reason) {
+        return PolicyDecision{verdict == PolicyVerdict::Allow, verdict == PolicyVerdict::RequireApproval, reason, verdict, CommandClass::NETWORK};
+    };
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const auto& value = arguments[index];
+        std::string lower(value);
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.find("proxycommand") != std::string::npos || lower.find("localcommand") != std::string::npos ||
+            lower.find("permitlocalcommand") != std::string::npos || lower.find("gatewayports") != std::string::npos)
+            return make(PolicyVerdict::Deny, "SSH_EXECUTION_OPTION_DENIED");
+        if (value == "-g" || value == "-R" || value.starts_with("-R")) return make(PolicyVerdict::Deny, "SSH_EXPOSING_FORWARD_DENIED");
+        if (value == "-L" || value.starts_with("-L")) {
+            const std::string spec = value == "-L" ? (index + 1 < arguments.size() ? arguments[index + 1] : "") : value.substr(2);
+            if (value == "-L") ++index;
+            // Accept only port:127.0.0.1:port or 127.0.0.1:port:127.0.0.1:port.
+            const auto colons = static_cast<std::size_t>(std::count(spec.begin(), spec.end(), ':'));
+            const bool loopbackBind = colons == 2 || spec.starts_with("127.0.0.1:");
+            const bool loopbackTarget = spec.find(":127.0.0.1:") != std::string::npos;
+            if (!loopbackBind || !loopbackTarget) return make(PolicyVerdict::Deny, "SSH_TUNNEL_OUTSIDE_LOOPBACK_DENIED");
+        }
+    }
+    const bool tunnelOnly = std::find(arguments.begin(), arguments.end(), "-N") != arguments.end();
+    if (!tunnelOnly) return make(PolicyVerdict::RequireApproval, "SSH_SESSION_REQUIRES_APPROVAL");
+    return make(rules.allowNetwork ? PolicyVerdict::Allow : PolicyVerdict::RequireApproval,
+                rules.allowNetwork ? "SSH_LOOPBACK_TUNNEL_ALLOWED" : "SSH_TUNNEL_REQUIRES_RULE");
+}
+
 }  // namespace
 
 PolicyDecision Policy::evaluate(CommandClass command) const {
@@ -172,6 +328,8 @@ PolicyDecision Policy::evaluate(const StructuredCommand& command) const {
         // A class-wide write rule is not an approval for a filesystem target.
         return decision(PolicyVerdict::RequireApproval, CommandClass::WRITE, "DELETE_REQUIRES_TARGET_APPROVAL");
     }
+    if ((program == "git" || program == "ssh") && arguments.size() == 1 && (arguments[0] == "--version" || arguments[0] == "-V"))
+        return evaluate(CommandClass::READ_ONLY);
     if (program == "git") {
         const auto parsed = gitCommand(arguments);
         if (parsed.dangerousConfiguration) return deny(CommandClass::PRIVILEGED, "GIT_EXECUTION_CONFIG_DENIED");
@@ -192,12 +350,19 @@ PolicyDecision Policy::evaluate(const StructuredCommand& command) const {
                 return decision(PolicyVerdict::RequireApproval, CommandClass::READ_ONLY, "GIT_READ_OPTIONS_REQUIRE_APPROVAL");
             return evaluate(CommandClass::READ_ONLY);
         }
+        if (gitReadAction(arguments, parsed.index)) return evaluate(CommandClass::READ_ONLY);
         if (action == "fetch" || action == "pull" || action == "push" || action == "clone" || action == "ls-remote")
             return evaluate(CommandClass::NETWORK);
         if (action == "add" || action == "commit" || action == "merge" || action == "branch" || action == "tag" ||
             action == "checkout" || action == "switch" || action == "restore" || action == "reset" || action == "rm")
             return evaluate(CommandClass::WRITE);
     }
+    if (program == "ssh") return sshDecision(arguments, rules_);
+    if (program == "sysctl" && std::any_of(arguments.begin(), arguments.end(), [](const auto& value) {
+            return value == "-w" || value.find('=') != std::string::npos;
+        })) return decision(PolicyVerdict::RequireApproval, CommandClass::PRIVILEGED, "SYSTEM_SETTING_REQUIRES_APPROVAL");
+    if (systemRead(program, arguments)) return evaluate(CommandClass::READ_ONLY);
+    if (program == "tailscale" || program == "curl") return evaluate(CommandClass::NETWORK);
     return decision(PolicyVerdict::RequireApproval, CommandClass::WRITE, "COMMAND_REQUIRES_APPROVAL");
 }
 

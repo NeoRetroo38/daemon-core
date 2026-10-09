@@ -24,5 +24,9 @@ mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 install -m 755 "$bin_path/DaemonMac" "$app_path/Contents/MacOS/Daemon"
 install -m 644 "$repo_root/apple/DaemonMac/Info.plist" "$app_path/Contents/Info.plist"
 install -m 644 "$repo_root/apple/DaemonMac/Assets/Daemon.icns" "$app_path/Contents/Resources/Daemon.icns"
+# SFX (assets/sfx/generate_sfx.py) y VFX de arranque (assets/vfx/render_boot.py, Blender).
+mkdir -p "$app_path/Contents/Resources/Sounds" "$app_path/Contents/Resources/VFX"
+for sound in "$repo_root"/assets/sfx/*.wav; do [ -f "$sound" ] && install -m 644 "$sound" "$app_path/Contents/Resources/Sounds/"; done
+for frame in "$repo_root"/assets/vfx/boot/boot_*.png; do [ -f "$frame" ] && install -m 644 "$frame" "$app_path/Contents/Resources/VFX/"; done
 plutil -lint "$app_path/Contents/Info.plist"
 printf '%s\n' "$app_path"

@@ -30,7 +30,7 @@ final class SnapshotTests: XCTestCase {
     }
 
     func testCABIAllocationAndJSONOwnership() throws {
-        XCTAssertEqual(CoreBridge.version, "0.1.0")
+        XCTAssertEqual(CoreBridge.version, "0.2.0")
         for _ in 0..<20 {
             let snapshot = try CoreBridge.snapshot(repositoryPath: "/daemon-native-test-path-that-does-not-exist")
             XCTAssertEqual(snapshot.schemaVersion, 1)
