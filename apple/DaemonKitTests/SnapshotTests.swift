@@ -56,4 +56,26 @@ final class SnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.repositories.isEmpty)
         XCTAssertFalse(snapshot.allowsRemoteControl)
     }
+
+    func testRepositoryInspectorFindsLocalCapabilitiesWithoutWriting() throws {
+        let insights = RepositoryInspector.inspect(path: FileManager.default.currentDirectoryPath)
+        XCTAssertGreaterThan(insights.fileCount, 0)
+        XCTAssertGreaterThan(insights.sourceLines, 0)
+        XCTAssertTrue(insights.capabilities.contains("Swift nativo"))
+        XCTAssertTrue(insights.capabilities.contains("C++ / Cubo"))
+    }
+
+    func testFilesystemDiagnosticOnlyReportsExistingEvidence() async {
+        let diagnostic = RepositoryDiagnostic(
+            id: "fixture", title: "Fixture", detail: "Read only",
+            kind: .files([FileManager.default.currentDirectoryPath + "/Package.swift"])
+        )
+        let state = await DiagnosticCatalog.run(diagnostic)
+        guard case .passed = state else { return XCTFail("Expected existing read-only evidence") }
+    }
+
+    func testIdentityProjectionReturnsOnlyDisplayNames() {
+        let fixture = #"{"version":1,"accounts":[{"id":"private-id","email":"private@example.test","passwordHash":"secret","profile":{"id":"profile-id","displayName":"Neo","role":"SUPERDEV"}}],"sessions":[{"tokenHash":"secret-token"}]}"#
+        XCTAssertEqual(RepositoryInspector.usernames(from: Data(fixture.utf8)), ["Neo"])
+    }
 }
