@@ -68,8 +68,10 @@ public struct MetricCubeView: NSViewRepresentable {
         self._selection = selection
     }
 
+    /// Primer recorrido en blanco (como en el visor del Cubo); comparados en lila, verde y crema.
     public static let runColors: [NSColor] = [
-        NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 1), .white, .systemOrange, .systemTeal, .systemPink, .systemYellow,
+        .white, NSColor(calibratedRed: 0.72, green: 0.6, blue: 1, alpha: 1), NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 1),
+        NSColor(calibratedRed: 0.93, green: 0.9, blue: 0.79, alpha: 1), .systemOrange, .systemTeal,
     ]
 
     public func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
@@ -92,7 +94,8 @@ public struct MetricCubeView: NSViewRepresentable {
         context.coordinator.highlight(selection, in: view.scene)
     }
 
-    func coordinate(_ value: Int) -> CGFloat { CGFloat(value - 2) * 1.2 }
+    /// Fila y columna 1…3 → coordenada en la cara; fase 1…3 → profundidad.
+    func coordinate(_ value: Int) -> CGFloat { CGFloat(value - 2) * 1.0 }
 
     func scene(_ coordinator: Coordinator) -> SCNScene {
         coordinator.signature = runs.map { $0.measurements.map(\.id).joined() }.joined(separator: "|")
@@ -100,70 +103,73 @@ public struct MetricCubeView: NSViewRepresentable {
         let scene = SCNScene()
         scene.background.contents = NSColor.black
         let root = scene.rootNode
-        let edge: CGFloat = 1.8
-        // Retícula 3×3×3 alámbrica: el lenguaje del Cubo.
-        let wire = NSColor(calibratedWhite: 0.42, alpha: 1)
+        let edge: CGFloat = 1.5
+        let gray = NSColor(calibratedWhite: 0.36, alpha: 1)
+        let green = NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 1)
+        let red = NSColor(calibratedRed: 0.85, green: 0.16, blue: 0.14, alpha: 1)
+        // Retícula 3×3×3 alámbrica, fina: el visor del Cubo de Neo.
         let ticks: [CGFloat] = [-edge, -edge / 3, edge / 3, edge]
         for a in ticks { for b in ticks {
-            line(root, SCNVector3(-edge, a, b), SCNVector3(edge, a, b), wire, 0.004)
-            line(root, SCNVector3(a, -edge, b), SCNVector3(a, edge, b), wire, 0.004)
-            line(root, SCNVector3(a, b, -edge), SCNVector3(a, b, edge), wire, 0.004)
+            let outer = (abs(a) == edge ? 1 : 0) + (abs(b) == edge ? 1 : 0)
+            let color = outer == 2 ? NSColor(calibratedWhite: 0.55, alpha: 1) : gray
+            let radius: CGFloat = outer == 2 ? 0.006 : 0.0035
+            line(root, SCNVector3(-edge, a, b), SCNVector3(edge, a, b), color, radius)
+            line(root, SCNVector3(a, -edge, b), SCNVector3(a, edge, b), color, radius)
+            line(root, SCNVector3(a, b, -edge), SCNVector3(a, b, edge), color, radius)
         } }
-        // Capas por fase (z): planos tenues con etiqueta.
+        // Diagonales rojas de referencia (cara trasera y diagonal espacial).
+        line(root, SCNVector3(-edge, edge, -edge), SCNVector3(edge, -edge, -edge), red, 0.005)
+        line(root, SCNVector3(-edge, -edge, -edge), SCNVector3(edge, edge, -edge), red, 0.005)
+        line(root, SCNVector3(-edge, edge, edge), SCNVector3(edge, -edge, -edge), red.withAlphaComponent(0.6), 0.004)
+        // Ejes verdes con su nombre: x col, y row, z phase.
+        let reach = edge * 1.22
+        line(root, SCNVector3(-reach, 0, 0), SCNVector3(reach, 0, 0), green, 0.011)
+        line(root, SCNVector3(0, -reach, 0), SCNVector3(0, reach, 0), green, 0.011)
+        line(root, SCNVector3(0, 0, -reach), SCNVector3(0, 0, reach), green, 0.011)
+        label(root, "x col", at: SCNVector3(reach + 0.08, 0.04, 0), color: green, size: 0.13)
+        label(root, "y row", at: SCNVector3(0.06, -reach - 0.22, 0), color: green, size: 0.13)
+        label(root, "z phase", at: SCNVector3(0.06, 0.04, reach + 0.08), color: green, size: 0.13)
         for (index, name) in CubeModel.phases.enumerated() {
-            let z = coordinate(index + 1)
-            let plane = SCNPlane(width: edge * 2, height: edge * 2)
-            plane.firstMaterial?.diffuse.contents = NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 1)
-            plane.firstMaterial?.lightingModel = .constant
-            plane.firstMaterial?.transparency = 0.035
-            plane.firstMaterial?.writesToDepthBuffer = false
-            plane.firstMaterial?.isDoubleSided = true
-            let node = SCNNode(geometry: plane)
-            node.position = SCNVector3(0, 0, z)
-            root.addChildNode(node)
-            label(root, name, at: SCNVector3(-edge - 0.1, edge + 0.15, z), color: NSColor(calibratedWhite: 0.7, alpha: 1))
+            label(root, "f\(index + 1) \(name.lowercased())", at: SCNVector3(-edge - 0.05, edge + 0.08, coordinate(index + 1)),
+                  color: NSColor(calibratedWhite: 0.5, alpha: 1), size: 0.09)
         }
-        label(root, "fila ↑", at: SCNVector3(-edge - 0.5, 0, -edge), color: NSColor(calibratedWhite: 0.45, alpha: 1))
-        label(root, "columna →", at: SCNVector3(0, -edge - 0.35, -edge), color: NSColor(calibratedWhite: 0.45, alpha: 1))
-        // Recorridos: una trayectoria por repositorio a través de las tres fases.
+        // Recorridos: una trayectoria por repositorio, vértices numerados 1 → 3.
         for (runIndex, run) in runs.enumerated() {
             let color = Self.runColors[runIndex % Self.runColors.count]
-            let offset = CGFloat(runIndex) * 0.09 - CGFloat(runs.count - 1) * 0.045
+            let offset = CGFloat(runIndex) * 0.07 - CGFloat(runs.count - 1) * 0.035
             var previous: SCNVector3?
             for measurement in run.measurements {
-                let position = SCNVector3(coordinate(measurement.column) + offset, coordinate(measurement.row) + offset, coordinate(measurement.phase))
-                let sphere = SCNSphere(radius: 0.11)
+                let position = SCNVector3(coordinate(measurement.column) + offset, -coordinate(measurement.row) + offset, coordinate(measurement.phase))
+                let sphere = SCNSphere(radius: 0.065)
                 sphere.firstMaterial?.diffuse.contents = color
-                sphere.firstMaterial?.emission.contents = color.withAlphaComponent(0.8)
+                sphere.firstMaterial?.lightingModel = .constant
                 let node = SCNNode(geometry: sphere)
                 node.position = position
                 let key = "\(run.repository)#\(measurement.id)"
                 node.name = key
                 coordinator.measurements[key] = measurement
                 root.addChildNode(node)
-                // Proyección hasta el suelo de la capa: lectura de fila/columna.
-                line(root, position, SCNVector3(position.x, -edge, position.z), color.withAlphaComponent(0.25), 0.006)
-                if let previous { line(root, previous, position, color, 0.022) }
+                // Halo de selección (invisible hasta que se selecciona).
+                let halo = SCNNode(geometry: SCNSphere(radius: 0.12))
+                halo.geometry?.firstMaterial?.diffuse.contents = color.withAlphaComponent(0.18)
+                halo.geometry?.firstMaterial?.lightingModel = .constant
+                halo.name = "halo:" + key
+                halo.isHidden = true
+                node.addChildNode(halo)
+                label(root, "\(measurement.phase)", at: SCNVector3(position.x + 0.09, position.y - 0.05, position.z), color: color, size: 0.11)
+                if let previous { line(root, previous, position, color, runIndex == 0 ? 0.016 : 0.011) }
                 previous = position
             }
-            label(root, run.repository, at: SCNVector3(edge + 0.2, edge - CGFloat(runIndex) * 0.32, -edge), color: color)
+            label(root, run.repository, at: SCNVector3(edge + 0.15, edge - CGFloat(runIndex) * 0.24, -edge), color: color, size: 0.12)
         }
         let camera = SCNNode()
         camera.camera = SCNCamera()
-        camera.camera?.fieldOfView = 40
-        camera.camera?.wantsHDR = true
-        camera.camera?.bloomIntensity = 0.35
-        camera.camera?.bloomThreshold = 0.75
-        camera.position = SCNVector3(4.6, 3.6, 6.4)
+        camera.camera?.fieldOfView = 38
+        camera.position = SCNVector3(3.9, 2.6, 5.4)
         let look = SCNLookAtConstraint(target: root)
         look.isGimbalLockEnabled = true
         camera.constraints = [look]
         root.addChildNode(camera)
-        let ambient = SCNNode()
-        ambient.light = SCNLight()
-        ambient.light?.type = .ambient
-        ambient.light?.intensity = 500
-        root.addChildNode(ambient)
         return scene
     }
 
@@ -181,14 +187,14 @@ public struct MetricCubeView: NSViewRepresentable {
         root.addChildNode(node)
     }
 
-    func label(_ root: SCNNode, _ text: String, at position: SCNVector3, color: NSColor) {
+    func label(_ root: SCNNode, _ text: String, at position: SCNVector3, color: NSColor, size: CGFloat = 0.16) {
         let geometry = SCNText(string: text, extrusionDepth: 0)
         geometry.font = NSFont.monospacedSystemFont(ofSize: 1, weight: .regular)
         geometry.flatness = 0.05
         geometry.firstMaterial?.diffuse.contents = color
         geometry.firstMaterial?.lightingModel = .constant
         let node = SCNNode(geometry: geometry)
-        node.scale = SCNVector3(0.16, 0.16, 0.16)
+        node.scale = SCNVector3(size, size, size)
         node.position = position
         node.constraints = [SCNBillboardConstraint()]
         root.addChildNode(node)
@@ -210,8 +216,8 @@ public struct MetricCubeView: NSViewRepresentable {
 
         func highlight(_ selected: CubeMeasurement?, in scene: SCNScene?) {
             scene?.rootNode.enumerateChildNodes { node, _ in
-                guard let name = node.name, let measurement = measurements[name] else { return }
-                node.scale = measurement == selected ? SCNVector3(1.8, 1.8, 1.8) : SCNVector3(1, 1, 1)
+                guard let name = node.name, name.hasPrefix("halo:"), let measurement = measurements[String(name.dropFirst(5))] else { return }
+                node.isHidden = measurement != selected
             }
         }
     }
@@ -232,10 +238,14 @@ public struct MetricCubePanel: View {
         ZStack(alignment: .topLeading) {
             MetricCubeView(runs: runs, selection: $selection)
             VStack(alignment: .leading, spacing: 4) {
-                Text("CUBO DE MÉTRICAS · SceneKit").font(DaemonFont.label).tracking(1.4).foregroundStyle(DaemonPalette.green)
-                Text("z = fase (código · git · operación) · fila × columna = nivel 1–3").font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
-                Text("arrastra para orbitar · rueda para zoom · clic en un punto").font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
+                Text("CUBO DE MÉTRICAS").font(DaemonFont.label).tracking(1.4).foregroundStyle(DaemonPalette.green)
+                Text("fase 1 código · fase 2 git · fase 3 operación").font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
             }.padding(12).allowsHitTesting(false)
+            VStack(spacing: 3) {
+                Spacer()
+                Text("last \(runs.count) \(runs.count == 1 ? "run" : "runs")").font(.system(size: 11, design: .monospaced)).foregroundStyle(DaemonPalette.green)
+                Text("drag to rotate · scroll to zoom · click a point · phase 1 → 3").font(.system(size: 9, design: .monospaced)).foregroundStyle(DaemonPalette.dim)
+            }.frame(maxWidth: .infinity).padding(.bottom, 10).allowsHitTesting(false)
             if let selection {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack { Text("FASE \(selection.phase) · \(selection.phaseName)").font(DaemonFont.label).foregroundStyle(DaemonPalette.green); Spacer()
@@ -255,6 +265,7 @@ public struct MetricCubePanel: View {
         }
         .frame(height: height)
         .overlay(Rectangle().stroke(DaemonPalette.line))
+        .cornerBrackets()
     }
 }
 #endif

@@ -206,9 +206,17 @@ public enum EcosystemProbe {
             guard desktop.online else { return await status("\(ip):\(port)", nil, note: "Desktop desconectado de la tailnet") }
             if definition.loopbackOnly {
                 // Solo comprobamos que NO acepta conexiones por la tailnet.
-                return await status("\(ip):\(port)", await NetworkProbe.tcp(host: ip, port: port, timeout: 1.5))
+                let probe = await NetworkProbe.tcp(host: ip, port: port, timeout: 1.5)
+                guard !probe.reachable else { return await status("\(ip):\(port)", probe) }
+                // Cerrado por la tailnet es lo correcto: contrato verificado, salud del Cubo sin medir.
+                let contract = ProbeResult(target: probe.target, reachable: false, statusCode: nil, latencyMs: nil, evidence: .partial,
+                                           detail: "no expuesto en la tailnet ✓ · salud: túnel", provenance: probe.provenance)
+                return ServiceStatus(definition: definition, machine: machine, endpoint: "\(ip):\(port)", probe: contract, listener: nil,
+                                     stats: await LatencyHistory.shared.stats(key), note: nil)
             }
-            let url = URL(string: "http://\(ip):\(port)\(definition.healthPath ?? "/")")!
+            // Por nombre MagicDNS (*.ts.net): ATS lo permite por excepción; una IP literal no.
+            let host = desktop.dnsName.isEmpty ? ip : desktop.dnsName
+            let url = URL(string: "http://\(host):\(port)\(definition.healthPath ?? "/")")!
             return await status(url.absoluteString, await NetworkProbe.http(url, timeout: 4))
         case .iphone:
             return nil

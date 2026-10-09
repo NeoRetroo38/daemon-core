@@ -28,7 +28,7 @@ public struct AgentChatView: View {
                     LazyVStack(alignment: .leading, spacing: 22) {
                         if session.messages.isEmpty { welcome }
                         ForEach(session.messages) { message in
-                            MessageRow(message: message, session: session, config: config, liveServices: liveServicesForRepository).id(message.id)
+                            MessageRow(message: message, perform: { session.perform($0) }, config: config, liveServices: liveServicesForRepository).id(message.id)
                         }
                     }
                     .padding(.horizontal, 28).padding(.vertical, 22)
@@ -58,11 +58,13 @@ public struct AgentChatView: View {
                 .buttonStyle(.plain).foregroundStyle(DaemonPalette.dim).help("Vaciar conversación")
         }
         .padding(.horizontal, 22).padding(.vertical, 14)
+        .background(SpeedLines(active: session.busy))
     }
 
     var welcome: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Mido antes de opinar.").font(DaemonFont.title).foregroundStyle(DaemonPalette.ink)
+            EditorialLabel("02", "Agente")
+            RisoTitle("Mido antes de opinar.", size: 34)
             Text(DaemonPersona.identity).font(.system(size: 13)).foregroundStyle(DaemonPalette.dim).frame(maxWidth: 620, alignment: .leading)
             Text("Cada respuesta lleva su evidencia: verificado, parcial o no verificado. Las acciones con riesgo piden tu pulsación.")
                 .font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.faint)
@@ -97,15 +99,19 @@ public struct AgentChatView: View {
     func send() {
         let text = input
         input = ""
+        SoundBoard.shared.play(.send)
         session.send(text)
     }
 }
 
 struct MessageRow: View {
     let message: ChatMessage
-    let session: AgentSession
+    let perform: (AgentAction) -> Void
     let config: TopologyConfig
     let liveServices: (String) -> Int?
+
+    var roleLabel: String { message.role == .clod ? "CLOD" : "DAEMON" }
+    var roleColor: Color { message.role == .clod ? DaemonPalette.violet : DaemonPalette.green }
 
     var body: some View {
         if message.role == .neo {
@@ -116,7 +122,7 @@ struct MessageRow: View {
         } else {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("DAEMON").font(DaemonFont.label).tracking(1.2).foregroundStyle(DaemonPalette.green)
+                    Text(roleLabel).font(DaemonFont.label).tracking(1.2).foregroundStyle(roleColor)
                     if let evidence = message.evidence { StatusDot(evidence) }
                 }.frame(width: 52, alignment: .leading)
                 VStack(alignment: .leading, spacing: 12) {
@@ -124,7 +130,7 @@ struct MessageRow: View {
                         HStack(spacing: 8) { ProgressView().controlSize(.small); Text("midiendo el entorno…").font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.dim) }
                     } else {
                         Text(message.text).font(.system(size: 14)).foregroundStyle(DaemonPalette.ink).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                        ForEach(message.blocks) { block in BlockView(block: block, session: session, config: config, liveServices: liveServices) }
+                        ForEach(message.blocks) { block in BlockView(block: block, perform: perform, config: config, liveServices: liveServices) }
                         HStack(spacing: 10) {
                             if let evidence = message.evidence { EvidenceTag(evidence) }
                             if !message.tools.isEmpty { Text(message.tools.joined(separator: " · ")).font(DaemonFont.label).foregroundStyle(DaemonPalette.faint) }
@@ -141,7 +147,7 @@ struct MessageRow: View {
 /// Renderiza cada bloque vivo de una respuesta.
 struct BlockView: View {
     let block: AgentBlock
-    let session: AgentSession
+    let perform: (AgentAction) -> Void
     let config: TopologyConfig
     let liveServices: (String) -> Int?
     @State private var topologySelection: String?
@@ -222,7 +228,7 @@ struct BlockView: View {
         case .actions(let actions):
             HStack(spacing: 8) {
                 ForEach(actions) { action in
-                    ActionButton(action: action) { session.perform(action) }
+                    ActionButton(action: action) { perform(action) }
                 }
             }
         }

@@ -5,17 +5,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum Section: String, CaseIterable, Identifiable {
-    case map, agent, repositories, system, network, technology
+    case map, agent, clod, repositories, system, network, technology
     var id: String { rawValue }
     var code: String {
-        switch self { case .map: "01"; case .agent: "02"; case .repositories: "03"; case .system: "04"; case .network: "05"; case .technology: "06" }
+        switch self { case .map: "01"; case .agent: "02"; case .clod: "03"; case .repositories: "04"; case .system: "05"; case .network: "06"; case .technology: "07" }
     }
     var title: String {
-        switch self { case .map: "Mapa vivo"; case .agent: "Agente"; case .repositories: "Repositorios"; case .system: "Sistema"; case .network: "Red"; case .technology: "Tecnología" }
+        switch self { case .map: "Mapa vivo"; case .agent: "Daemon"; case .clod: "Clod"; case .repositories: "Repositorios"; case .system: "Sistema"; case .network: "Red"; case .technology: "Tecnología" }
     }
     var symbol: String {
         switch self {
-        case .map: "point.3.filled.connected.trianglepath.dotted"; case .agent: "text.bubble"; case .repositories: "shippingbox"
+        case .map: "point.3.filled.connected.trianglepath.dotted"; case .agent: "text.bubble"; case .clod: "person.2.wave.2"; case .repositories: "shippingbox"
         case .system: "cpu"; case .network: "network"; case .technology: "square.stack.3d.up"
         }
     }
@@ -31,8 +31,14 @@ final class DaemonAppModel: ObservableObject {
     @Published private(set) var refreshing = false
     @Published private(set) var observing = false
     @Published var selectedRepositoryPath: String?
+    @Published var live = true
+    @Published var interval: Double = 20
+    @Published private(set) var latencyTrace: [Int] = []
+    @Published private(set) var observations = 0
     let config = TopologyConfig.load()
     private(set) var session: AgentSession!
+    private(set) var clod: ClodSession!
+    private var knownCritical: Set<String> = []
     private static let catalogKey = "daemon.repositoryCatalog.v1"
     private var loop: Task<Void, Never>?
 
@@ -44,6 +50,10 @@ final class DaemonAppModel: ObservableObject {
             repositoryPaths = UserDefaults.standard.stringArray(forKey: Self.catalogKey) ?? []
         }
         session = AgentSession { [unowned self] in
+            AgentContext(repositories: self.snapshot?.repositories ?? [], ecosystem: self.ecosystem, config: self.config,
+                         selectedRepositoryPath: self.selectedRepositoryPath)
+        }
+        clod = ClodSession(memory: ClodMemory(workspaceRoot: config.workspaceRoot), daemon: session) { [unowned self] in
             AgentContext(repositories: self.snapshot?.repositories ?? [], ecosystem: self.ecosystem, config: self.config,
                          selectedRepositoryPath: self.selectedRepositoryPath)
         }
@@ -102,7 +112,15 @@ final class DaemonAppModel: ObservableObject {
     func refreshEcosystem() async {
         guard !observing else { return }
         observing = true
-        ecosystem = await EcosystemProbe.observe(config: config)
+        let value = await EcosystemProbe.observe(config: config)
+        ecosystem = value
+        observations += 1
+        let latencies = value.services.compactMap { $0.probe?.latencyMs }
+        latencyTrace.append(latencies.isEmpty ? 0 : latencies.reduce(0, +) / latencies.count)
+        if latencyTrace.count > 120 { latencyTrace.removeFirst(latencyTrace.count - 120) }
+        let critical = Set(value.alerts.filter { $0.level == .critical }.map(\.id))
+        if !critical.subtracting(knownCritical).isEmpty { SoundBoard.shared.play(.alert) }
+        knownCritical = critical
         observing = false
     }
 
@@ -115,8 +133,9 @@ final class DaemonAppModel: ObservableObject {
             await self?.refreshEcosystem()
             await self?.refreshToolchain()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                guard let self, NSApp.isActive else { continue }
+                let seconds = self?.interval ?? 20
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                guard let self, self.live, NSApp.isActive else { continue }
                 await self.refreshEcosystem()
             }
         }
@@ -129,7 +148,7 @@ struct DaemonMacApp: App {
 
     var body: some Scene {
         WindowGroup("Daemon") {
-            DaemonRoot(model: model, session: model.session)
+            DaemonRoot(model: model, session: model.session, clod: model.clod)
                 .frame(minWidth: 1100, minHeight: 720)
                 .preferredColorScheme(.dark)
         }
@@ -146,15 +165,31 @@ struct DaemonMacApp: App {
 struct DaemonRoot: View {
     @ObservedObject var model: DaemonAppModel
     @ObservedObject var session: AgentSession
+    @ObservedObject var clod: ClodSession
     @State private var section: Section = .map
     @State private var mapSelection: String?
     @State private var showingSettings = false
+    @State private var booting = true
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Rectangle().fill(DaemonPalette.line).frame(width: 1)
-            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    sidebar
+                    Rectangle().fill(DaemonPalette.line).frame(width: 1)
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                TransportBar(live: $model.live, interval: $model.interval, observing: model.observing, latencies: model.latencyTrace,
+                             observations: model.observations, lastObserved: model.ecosystem?.observedAt) {
+                    SoundBoard.shared.play(.measure)
+                    Task { await model.refreshEcosystem() }
+                }
+            }
+            PaperGrain(opacity: 0.05)
+            if booting {
+                BootSequence { withAnimation(.easeOut(duration: 0.45)) { booting = false } }
+                    .transition(.opacity)
+            }
         }
         .background(Color.black)
         .task { model.start() }
@@ -165,7 +200,7 @@ struct DaemonRoot: View {
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                DaemonSigil(active: session.busy || model.observing).frame(width: 22, height: 22)
+                DaemonSigil(active: session.busy || clod.busy || model.observing).frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("DAEMON").font(.system(size: 17, weight: .light, design: .monospaced)).tracking(4)
                     Text("control plane · Scenarys").font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
@@ -220,6 +255,7 @@ struct DaemonRoot: View {
         }
         .padding(.horizontal, 16)
         .frame(width: 222)
+        .background(alignment: .bottom) { Halftone(color: DaemonPalette.plum, spacing: 6, focus: .bottomLeading).frame(height: 260).opacity(0.55) }
         .background(DaemonPalette.panel.opacity(0.6))
     }
 
@@ -227,6 +263,8 @@ struct DaemonRoot: View {
         switch section {
         case .agent:
             AgentChatView(session: session, config: model.config) { model.liveServices(for: $0) }
+        case .clod:
+            ClodChatView(clod: clod, config: model.config) { model.liveServices(for: $0) }
         case .map:
             ScrollView { OverviewView(model: model, session: session, selection: $mapSelection).padding(28) }
         case .repositories:
@@ -246,9 +284,10 @@ struct ScreenTitle: View {
     let title: String
     let subtitle: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(code).font(DaemonFont.label).tracking(2).foregroundStyle(DaemonPalette.green)
-            Text(title).font(DaemonFont.title)
+        VStack(alignment: .leading, spacing: 10) {
+            let parts = code.components(separatedBy: " · ")
+            EditorialLabel(parts.first ?? code, parts.dropFirst().joined(separator: " "))
+            RisoTitle(title, size: 36)
             Text(subtitle).font(.system(size: 12)).foregroundStyle(DaemonPalette.dim)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -269,6 +308,7 @@ struct OverviewView: View {
             if let ecosystem = model.ecosystem {
                 HStack(alignment: .top, spacing: 14) {
                     TopologyMapView(snapshot: ecosystem, config: model.config, selection: $selection).frame(height: 520)
+                        .overlay(Scanlines(opacity: 0.04)).cornerBrackets()
                     if let selection, let node = TopologyLayout.build(ecosystem, config: model.config).nodes.first(where: { $0.id == selection }) {
                         TopologyInspector(node: node).frame(width: 280)
                     }
@@ -314,7 +354,7 @@ struct RepositoriesView: View {
                 Button("‹ CATÁLOGO") { model.selectedRepositoryPath = nil }.buttonStyle(.plain).font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
                 RepositoryWorkspaceView(repository: repository, allRepositories: model.repositories, session: session) { model.liveServices(for: $0) }
             } else {
-                ScreenTitle(code: "03 · REPOSITORIOS", title: "Catálogo", subtitle: "Descubierto en \(model.config.workspaceRoot). Quitar una entrada nunca borra archivos.")
+                ScreenTitle(code: "04 · REPOSITORIOS", title: "Catálogo", subtitle: "Descubierto en \(model.config.workspaceRoot). Quitar una entrada nunca borra archivos.")
                 HStack(spacing: 8) {
                     TextField("Ruta de un repositorio Git", text: $pendingPath).textFieldStyle(.plain).font(DaemonFont.mono)
                         .padding(8).overlay(Rectangle().stroke(DaemonPalette.line)).onSubmit(add)
@@ -361,7 +401,7 @@ struct SystemView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            ScreenTitle(code: "04 · SISTEMA", title: machine.hostName, subtitle: "\(machine.model) · \(machine.osVersion) · lecturas nativas sin procesos externos")
+            ScreenTitle(code: "05 · SISTEMA", title: machine.hostName, subtitle: "\(machine.model) · \(machine.osVersion) · lecturas nativas sin procesos externos")
             let gb = 1_073_741_824.0
             let p = machine.provenance
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 8)], spacing: 8) {
@@ -408,7 +448,7 @@ struct NetworkView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            ScreenTitle(code: "05 · RED", title: "Tailnet y exposición", subtitle: "Preferencia: loopback › socket › túnel SSH › Tailscale › LAN › Internet.")
+            ScreenTitle(code: "06 · RED", title: "Tailnet y exposición", subtitle: "Preferencia: loopback › socket › túnel SSH › Tailscale › LAN › Internet.")
             if let ecosystem = model.ecosystem {
                 TailnetTable(snapshot: ecosystem.tailnet)
                 VStack(alignment: .leading, spacing: 10) {
@@ -416,6 +456,10 @@ struct NetworkView: View {
                     KeyValueRow("Veredicto del núcleo", "\(ecosystem.cubeExposure.status) · \(ecosystem.cubeExposure.reason)",
                                 color: ecosystem.cubeExposure.exposed ? DaemonPalette.red : (ecosystem.cubeExposure.safe ? DaemonPalette.green : DaemonPalette.amber))
                     KeyValueRow("Túnel SSH", ecosystem.tunnelActive ? "activo (ssh escucha en 127.0.0.1:8765)" : "inactivo")
+                    KeyValueRow("Cube Link (servicio permanente)", FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.scenarys.cubelink.plist")
+                                ? "instalado · LaunchAgent com.scenarys.cubelink" : "no instalado · ~/Desktop/scenarys/cube-link.command")
+                    Text("Cualquier programa de este Mac usa el Cubo en http://127.0.0.1:8765. Entre máquinas viaja cifrado por SSH sobre Tailscale; nunca se publica en la LAN.")
+                        .font(DaemonFont.label).foregroundStyle(DaemonPalette.dim)
                     ForEach(ecosystem.status("neo-cube")) { status in KeyValueRow(status.machine.label, "\(status.endpoint ?? "—") · \(status.label)", color: DaemonPalette.color(status.evidence)) }
                     KeyValueRow("Usuario SSH del Desktop", model.config.desktopSSHUser ?? "sin configurar (topology.json)")
                     HStack(spacing: 8) {
@@ -447,7 +491,7 @@ struct TechnologyScreen: View {
     @ObservedObject var model: DaemonAppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            ScreenTitle(code: "06 · TECNOLOGÍA", title: "De qué está hecho Daemon", subtitle: "Versión y licencia solo desde fuentes locales verificables; el resto queda «no verificado».")
+            ScreenTitle(code: "07 · TECNOLOGÍA", title: "De qué está hecho Daemon", subtitle: "Versión y licencia solo desde fuentes locales verificables; el resto queda «no verificado».")
             TechnologyTable(tools: model.toolchain?.tools ?? [], registry: true)
             SectionHeader("MOTOR DE HERRAMIENTAS", "lo único que el agente puede invocar", trailing: "\(ToolCatalog.all.count) herramientas")
             VStack(spacing: 0) {
@@ -476,6 +520,8 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var model = AgentSettings.model
+    @State private var clodModel = ClodSession.model
+    @State private var sfx = SoundBoard.shared.enabled
     @State private var status = AgentKeychain.configured ? "API key guardada en el Llavero" : "Sin API key: el agente funciona en modo local"
 
     var body: some View {
@@ -485,7 +531,9 @@ struct SettingsSheet: View {
             Text("Solo se usa cuando el router local no reconoce la intención. Ve únicamente herramientas de lectura y el índice compacto (context.json).")
                 .font(.system(size: 12)).foregroundStyle(DaemonPalette.dim)
             SecureField("API key de Anthropic", text: $key).textFieldStyle(.roundedBorder)
-            TextField("Modelo", text: $model).textFieldStyle(.roundedBorder)
+            TextField("Modelo de Daemon (fallback LLM)", text: $model).textFieldStyle(.roundedBorder)
+            TextField("Modelo de Clod", text: $clodModel).textFieldStyle(.roundedBorder)
+            Toggle("SFX (generados por assets/sfx, sustituibles desde Ableton)", isOn: $sfx)
             Text(status).font(DaemonFont.monoSmall).foregroundStyle(DaemonPalette.dim)
             HStack {
                 Button("Borrar key") { AgentKeychain.delete(); status = "API key eliminada del Llavero" }
@@ -493,6 +541,8 @@ struct SettingsSheet: View {
                 Button("Cerrar") { dismiss() }
                 Button("Guardar") {
                     AgentSettings.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ClodSession.model = clodModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                    SoundBoard.shared.enabled = sfx
                     if !key.isEmpty { status = AgentKeychain.save(key) ? "API key guardada en el Llavero" : "No se pudo guardar en el Llavero" }
                     key = ""
                 }.keyboardShortcut(.defaultAction)

@@ -134,10 +134,10 @@ public struct RepositoryWorkspaceView: View {
     var git: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let record {
-                if !record.git.workingChanges.isEmpty { BlockView(block: .changes(record.git.workingChanges), session: session, config: .standard, liveServices: liveServices) }
+                if !record.git.workingChanges.isEmpty { BlockView(block: .changes(record.git.workingChanges), perform: { session.perform($0) }, config: .standard, liveServices: liveServices) }
                 CommitTimeline(commits: record.git.recent, title: "recientes")
                 if let github = record.github {
-                    BlockView(block: .pullRequests(github.pullRequests, slug: github.slug), session: session, config: .standard, liveServices: liveServices)
+                    BlockView(block: .pullRequests(github.pullRequests, slug: github.slug), perform: { session.perform($0) }, config: .standard, liveServices: liveServices)
                     Text("GitHub · \(DaemonClock.relative(github.provenance.observedAt)) · \(github.evidence.label)").font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
                 }
                 HStack(spacing: 8) {

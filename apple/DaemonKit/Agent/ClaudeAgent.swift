@@ -68,18 +68,28 @@ public enum ClaudeAgent {
 
     public static func respond(to question: String, history: [(role: String, text: String)], context: AgentContext,
                                digest: String, ecosystem: String) async throws -> ToolOutcome {
+        try await loop(question: question, history: history, context: context, model: AgentSettings.model,
+                       system: DaemonPersona.systemPrompt(digest: digest, ecosystem: ecosystem), extraTools: [], extraHandler: nil)
+    }
+
+    /// Bucle de tool use genérico (Daemon y Clod). Las herramientas del
+    /// catálogo solo se ofrecen si son READ; las extra las resuelve quien llama.
+    public static func loop(question: String, history: [(role: String, text: String)], context: AgentContext, model: String,
+                            system: String, extraTools: [[String: Any]],
+                            extraHandler: (@Sendable (String, [String: String]) async -> (text: String, blocks: [AgentBlock])?)?) async throws -> ToolOutcome {
         guard let key = AgentKeychain.read() else { throw ClaudeAgentError.notConfigured }
-        var messages: [[String: Any]] = history.suffix(8).map { ["role": $0.role, "content": $0.text] }
+        var messages: [[String: Any]] = history.suffix(10).map { ["role": $0.role, "content": $0.text] }
+        // La API exige alternancia empezando por "user".
+        while let first = messages.first, first["role"] as? String != "user" { messages.removeFirst() }
         messages.append(["role": "user", "content": question])
         var blocks: [AgentBlock] = []
         var used: [String] = []
         var evidences: [Evidence] = []
         let wireToTool = Dictionary(uniqueKeysWithValues: ToolCatalog.all.map { (wireName($0.name), $0.name) })
-        for _ in 0..<5 {
-            let body: [String: Any] = ["model": AgentSettings.model, "max_tokens": 1200,
-                                       "system": DaemonPersona.systemPrompt(digest: digest, ecosystem: ecosystem),
-                                       "tools": toolDefinitions, "messages": messages]
-            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: 60)
+        for _ in 0..<6 {
+            let body: [String: Any] = ["model": model, "max_tokens": 1600, "system": system,
+                                       "tools": toolDefinitions + extraTools, "messages": messages]
+            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: 90)
             request.httpMethod = "POST"
             request.setValue(key, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -99,14 +109,21 @@ public enum ClaudeAgent {
             }
             var results: [[String: Any]] = []
             for call in calls {
-                guard let id = call["id"] as? String, let wire = call["name"] as? String, let tool = wireToTool[wire],
-                      ToolCatalog.spec(tool)?.risk == .read else { continue }
+                guard let id = call["id"] as? String, let wire = call["name"] as? String else { continue }
                 let input = (call["input"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
-                let outcome = await ToolExecutor.run(tool, arguments: input, context: context, approval: .automatic)
-                blocks += outcome.blocks.filter { if case .actions = $0 { return false }; return true }
-                used += outcome.toolsUsed
-                evidences.append(outcome.evidence)
-                results.append(["type": "tool_result", "tool_use_id": id, "content": "[\(outcome.evidence.label)] " + String(outcome.digest.prefix(6000))])
+                if let tool = wireToTool[wire], ToolCatalog.spec(tool)?.risk == .read {
+                    let outcome = await ToolExecutor.run(tool, arguments: input, context: context, approval: .automatic)
+                    blocks += outcome.blocks.filter { if case .actions = $0 { return false }; return true }
+                    used += outcome.toolsUsed
+                    evidences.append(outcome.evidence)
+                    results.append(["type": "tool_result", "tool_use_id": id, "content": "[\(outcome.evidence.label)] " + String(outcome.digest.prefix(6000))])
+                } else if let extraHandler, let handled = await extraHandler(wire, input) {
+                    blocks += handled.blocks
+                    used.append(wire)
+                    results.append(["type": "tool_result", "tool_use_id": id, "content": String(handled.text.prefix(6000))])
+                } else {
+                    results.append(["type": "tool_result", "tool_use_id": id, "content": "Herramienta no permitida.", "is_error": true])
+                }
             }
             messages.append(["role": "user", "content": results])
         }

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 public struct ChatMessage: Identifiable, Sendable {
-    public enum Role: String, Sendable { case neo, daemon }
+    public enum Role: String, Sendable { case neo, daemon, clod }
     public let id = UUID()
     public let role: Role
     public var text: String
@@ -68,6 +68,7 @@ public final class AgentSession: ObservableObject {
             self.messages[index].engine = outcome.toolsUsed.isEmpty ? "local" : (self.messages[index].engine.isEmpty ? "local" : self.messages[index].engine)
             for block in outcome.blocks { if case .topology(let snapshot) = block { self.lastEcosystem = snapshot } }
             self.busy = false
+            SoundBoard.shared.play(for: outcome.evidence)
         }
     }
 
