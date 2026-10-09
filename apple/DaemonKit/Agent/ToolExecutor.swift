@@ -288,7 +288,8 @@ public enum ToolExecutor {
             let broken = snapshot.firstBrokenHop
             let text = broken.map { "La ruta se rompe en \($0.name): \($0.detail)." } ?? "Ningún eslabón falla. Los no verificados aparecen como tales."
             let rows = snapshot.services.filter { ["choisys-web", "choisys-api", "neo-cube", "landing"].contains($0.definition.id) }
-            return ToolOutcome(text: text, blocks: [.path(snapshot.productPath), .services(rows)] + (snapshot.alerts.isEmpty ? [] : [.alerts(snapshot.alerts)]) +
+            let relevant = snapshot.alerts.filter { $0.level >= .warning }
+            return ToolOutcome(text: text, blocks: [.path(snapshot.productPath), .services(rows)] + (relevant.isEmpty ? [] : [.alerts(relevant)]) +
                                [.actions([AgentAction(title: "Comprobar Neon", tool: "neon.health")])],
                                evidence: Evidence.weakest(snapshot.productPath.map(\.evidence)))
         default:

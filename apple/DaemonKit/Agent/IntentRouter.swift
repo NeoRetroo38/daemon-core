@@ -45,7 +45,7 @@ public enum IntentRouter {
         if has(text, "tunel") { return intent(has(text, "cierra", "para", "deten", "close") ? "cube.tunnel.close" : "cube.tunnel.open") }
         if has(text, "compila", "build") && (has(text, "daemon") || repo == "daemon-core" || repo == nil) && !has(text, "test") { return intent("daemon.build") }
         if has(text, "instala") && !has(text, "instalad") { return intent("daemon.install") }
-        if has(text, "test", "prueba") && imperative { return intent("repo.tests", repo == nil ? ["repo": "daemon-core"] : [:]) }
+        if text.range(of: #"\b(tests?|pruebas?)\b"#, options: .regularExpression) != nil && imperative { return intent("repo.tests", repo == nil ? ["repo": "daemon-core"] : [:]) }
         if has(text, "deten", "para el servicio", "mata"), let port = port(in: text) { return intent("service.stop", ["port": port]) }
         if has(text, "puerto") && port(in: text) == nil {
             let declared: [(String, String)] = [("api", "3000"), ("frontend", "8081"), ("web", "8081"), ("landing", "5173"), ("cubo", "8765"), ("motor", "8765")]

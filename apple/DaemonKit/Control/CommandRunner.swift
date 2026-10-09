@@ -98,6 +98,8 @@ public enum CommandRunner {
             "LANG": inherited["LANG"] ?? "en_US.UTF-8",
             "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GH_PROMPT_DISABLED": "1",
             "NO_COLOR": "1", "GH_NO_UPDATE_NOTIFIER": "1", "PAGER": "cat",
+            // La CLI de Tailscale (App Store) solo actúa como CLI si existe TERM.
+            "TERM": "dumb",
         ]
         // HOME y USER son necesarios para que gh y ssh encuentren su propia
         // configuración; ninguna variable de credenciales se reenvía.

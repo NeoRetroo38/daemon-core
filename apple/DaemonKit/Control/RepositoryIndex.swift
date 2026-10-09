@@ -14,6 +14,12 @@ public struct RepositoryRecord: Codable, Sendable {
     public var reused: Bool = false
 
     public var age: TimeInterval { Date().timeIntervalSince(scannedAt) }
+
+    public init(path: String, name: String, fingerprint: String, insights: RepositoryInsights, git: GitInsights,
+                scannedAt: Date, scanMs: Int, github: GitHubSnapshot? = nil) {
+        self.path = path; self.name = name; self.fingerprint = fingerprint; self.insights = insights
+        self.git = git; self.scannedAt = scannedAt; self.scanMs = scanMs; self.github = github
+    }
 }
 
 /// Resumen compacto para el agente: es lo único que viaja a un LLM.

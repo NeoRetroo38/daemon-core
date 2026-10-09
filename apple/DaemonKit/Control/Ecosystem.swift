@@ -24,6 +24,12 @@ public struct ServiceStatus: Codable, Sendable, Hashable, Identifiable {
     public let stats: LatencyStats
     public let note: String?
 
+    public init(definition: ServiceDefinition, machine: MachineRole, endpoint: String?, probe: ProbeResult?,
+                listener: ListeningSocket?, stats: LatencyStats, note: String?) {
+        self.definition = definition; self.machine = machine; self.endpoint = endpoint; self.probe = probe
+        self.listener = listener; self.stats = stats; self.note = note
+    }
+
     public var id: String { definition.id + "@" + machine.rawValue }
     public var evidence: Evidence { probe?.evidence ?? .unverified }
     public var alive: Bool { probe?.reachable == true }
@@ -77,6 +83,13 @@ public struct EcosystemSnapshot: Codable, Sendable {
     public let tunnelActive: Bool
     public let alerts: [DaemonAlert]
     public let durationMs: Int
+
+    public init(observedAt: Date, machine: MachineSnapshot?, ports: [ListeningSocket], portsEvidence: Evidence, tailnet: TailnetSnapshot,
+                services: [ServiceStatus], neon: NeonReport?, cubeExposure: ExposureVerdict, tunnelActive: Bool, alerts: [DaemonAlert], durationMs: Int) {
+        self.observedAt = observedAt; self.machine = machine; self.ports = ports; self.portsEvidence = portsEvidence; self.tailnet = tailnet
+        self.services = services; self.neon = neon; self.cubeExposure = cubeExposure; self.tunnelActive = tunnelActive
+        self.alerts = alerts; self.durationMs = durationMs
+    }
 
     public func status(_ id: String) -> [ServiceStatus] { services.filter { $0.definition.id == id } }
     public func best(_ id: String) -> ServiceStatus? {
@@ -138,12 +151,19 @@ public enum EcosystemProbe {
                                       detail: "\(desktopCube.endpoint ?? "8765") acepta conexiones TCP. Debe escuchar solo en 127.0.0.1 y llegar por túnel SSH.",
                                       provenance: desktopCube.probe?.provenance ?? provenance))
         }
+        var systemListeners: [ListeningSocket] = []
         for socket in ports.sockets where socket.scope >= .allInterfaces || socket.scope == .publicNetwork {
             let known = config.services.first { $0.port == socket.port }
             if known?.loopbackOnly == true { continue }
+            guard known != nil || socket.isDevelopmentProcess else { systemListeners.append(socket); continue }
             alerts.append(DaemonAlert(id: "exposed-\(socket.id)", level: .warning, title: ":\(socket.port) escucha en \(socket.scope.label)",
-                                      detail: "\(socket.command) (PID \(socket.pid)) en \(socket.address). \(known.map { "Servicio \($0.name)." } ?? "Servicio no declarado.")",
+                                      detail: "\(socket.command) (PID \(socket.pid)) en \(socket.address). \(known.map { "Servicio \($0.name): visible fuera de este Mac." } ?? "Proceso de desarrollo no declarado.")",
                                       provenance: ports.provenance))
+        }
+        if !systemListeners.isEmpty {
+            let names = Array(Set(systemListeners.map { $0.knownLabel ?? $0.command })).sorted().joined(separator: ", ")
+            alerts.append(DaemonAlert(id: "system-listeners", level: .info, title: "\(systemListeners.count) listeners del sistema en todas las interfaces",
+                                      detail: "\(names). No son servicios de Scenarys; revisa en Ajustes del Sistema si no los necesitas.", provenance: ports.provenance))
         }
         if !tailnet.running {
             alerts.append(DaemonAlert(id: "tailnet", level: .info, title: "Tailnet no verificada",

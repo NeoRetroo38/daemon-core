@@ -11,6 +11,25 @@ public struct ListeningSocket: Codable, Sendable, Hashable, Identifiable {
 
     public var id: String { "\(pid)-\(address)-\(port)" }
     public var scope: AddressScope { AddressScope.classify(address) }
+
+    /// Procesos de desarrollo: sus listeners abiertos sí son relevantes.
+    public var isDevelopmentProcess: Bool {
+        let name = command.lowercased()
+        return ["node", "ssh", "neo-cube", "python", "ruby", "java", "deno", "bun", "postgres", "docker", "com.docke", "vite", "expo", "nginx", "httpd", "caddy", "daemon"]
+            .contains { name.hasPrefix($0) }
+    }
+
+    /// Nombre legible de listeners conocidos del sistema.
+    public var knownLabel: String? {
+        switch command {
+        case "ControlCenter": "Receptor AirPlay (macOS)"
+        case "rapportd": "Continuidad (macOS)"
+        case "IPNExtension": "Tailscale (extensión de red)"
+        case "sharingd": "Compartir (macOS)"
+        case "Spotify": "Spotify Connect"
+        default: nil
+        }
+    }
 }
 
 public enum PortParser {

@@ -37,6 +37,7 @@ public enum CoreBridge {
 public struct ExposureVerdict: Codable, Sendable, Equatable {
     public let status: String
     public let reason: String
+    public init(status: String, reason: String) { self.status = status; self.reason = reason }
     public var exposed: Bool { status == "EXPOSED" }
     public var safe: Bool { status == "SAFE" }
 }
