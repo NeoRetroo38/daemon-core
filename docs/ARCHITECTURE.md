@@ -50,6 +50,9 @@ vista mantiene cuatro superficies locales y de solo lectura:
 - **Mapa 3D:** visualización SceneKit de la distribución tecnológica. Blender y
   Ableton se detectan como herramientas creativas instaladas, pero no se lanzan
   ni controlan desde el runtime.
+- **Identidades mínimas:** si el repositorio contiene login y persistencia,
+  Daemon puede proyectar exclusivamente `displayName` desde el almacén local
+  autorizado. Correo, IDs, roles, hashes, sesiones y credenciales se descartan.
 - **Agente:** Nexo conserva una identidad fija y recibe el snapshot y las
   métricas del repositorio seleccionado. La versión actual responde y propone;
   no edita archivos ni ejecuta implementaciones.

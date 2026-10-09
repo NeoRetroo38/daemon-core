@@ -24,6 +24,8 @@ La API de choisys envía las decisiones de cada fase y recibe la confirmación; 
 - Métricas locales de archivos, líneas, tamaño, lenguajes y capacidades.
 - Diagnósticos de solo lectura para API, backend, frontend y Cubo.
 - Visualización 3D interactiva con SceneKit.
+- Cubo 3×3×3 para cruzar densidad de código, estado Git y capacidad operativa.
+- Proyección de usuarios limitada al nombre visible en repos con login y DB.
 - Detección de Blender y Ableton Live Lite como estudio creativo local.
 - Chat Nexo con personalidad inmutable y contexto del repositorio seleccionado.
 - Daemon continúa sin escribir código, ejecutar shell ni controlar servicios.

@@ -68,6 +68,23 @@ public struct RepositoryWorkspaceView: View {
                         }
                     }
                 }
+                if insights.hasLogin && insights.hasDatabase {
+                    panel("Registros de usuario · datos minimizados") {
+                        if insights.usernames.isEmpty {
+                            Text("Login y base de datos detectados. No hay nombres disponibles en el almacén local autorizado.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(insights.usernames, id: \.self) { username in
+                                    Label(username, systemImage: "person.crop.circle")
+                                        .font(.system(.body, design: .rounded))
+                                }
+                            }
+                        }
+                        Text("Solo se lee displayName; Daemon descarta correo, identificadores, roles, hashes y sesiones.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
                 panel("Estudio creativo local") {
                     HStack(spacing: 24) {
                         capability("Blender", available: insights.blenderAvailable, purpose: "modelado y exportación 3D")
@@ -160,38 +177,82 @@ public struct RepositorySceneView: View {
     public init(insights: RepositoryInsights) { self.insights = insights }
 
     public var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
             SceneView(scene: scene, options: [.allowsCameraControl, .autoenablesDefaultLighting])
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-            Text("Arrastra para orbitar · pellizca para ampliar")
-                .font(.caption.monospaced()).foregroundStyle(.white.opacity(0.75)).padding(18)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("CUBO DE MÉTRICAS").font(.caption.monospaced()).foregroundStyle(DaemonPalette.green)
+                Text("Código × Git × Operación").font(.title3.weight(.light)).foregroundStyle(.white)
+                Text("27 celdas · densidad conjunta del repositorio").font(.caption).foregroundStyle(.white.opacity(0.65))
+                Spacer()
+                HStack(spacing: 14) {
+                    legend("Código", value: codeScore)
+                    legend("Git", value: gitScore)
+                    legend("Operación", value: operationScore)
+                }
+                Text("Arrastra para orbitar · pellizca para ampliar")
+                    .font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.6))
+            }.padding(18)
         }.background(DaemonPalette.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var codeScore: Int { min(100, max(8, insights.sourceLines / 120)) }
+    private var gitScore: Int { min(100, max(12, insights.fileCount / 2)) }
+    private var operationScore: Int {
+        min(100, insights.capabilities.count * 18 + (insights.hasDatabase ? 18 : 0) + (insights.hasLogin ? 14 : 0))
+    }
+
+    private func legend(_ title: String, value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.white.opacity(0.65))
+            Text("\(value)%").font(.caption.monospaced().weight(.semibold)).foregroundStyle(.white)
+        }
     }
 
     private var scene: SCNScene {
         let scene = SCNScene()
         scene.background.contents = NSColor.black
-        let metrics = Array(insights.languages.prefix(8))
-        for (index, metric) in metrics.enumerated() {
-            let height = max(0.35, CGFloat(metric.files) / CGFloat(max(metrics.first?.files ?? 1, 1)) * 3.6)
-            let box = SCNBox(width: 0.62, height: height, length: 0.62, chamferRadius: 0.08)
-            let material = SCNMaterial()
-            material.diffuse.contents = NSColor(calibratedRed: 0.22, green: 1, blue: 0.08, alpha: 0.82)
-            material.emission.contents = NSColor(calibratedRed: 0.04, green: 0.24, blue: 0.02, alpha: 1)
-            box.materials = [material]
-            let node = SCNNode(geometry: box)
-            node.position = SCNVector3(Float(index % 4) - 1.5, Float(height / 2), Float(index / 4) - 0.5)
-            scene.rootNode.addChildNode(node)
+        let scores = [codeScore, gitScore, operationScore]
+        let combined = max(1, scores.reduce(0, +) / scores.count)
+        for x in 0..<3 {
+            for y in 0..<3 {
+                for z in 0..<3 {
+                    let threshold = ((x + 1) * scores[0] + (y + 1) * scores[1] + (z + 1) * scores[2]) / 9
+                    let active = threshold <= combined
+                    let box = SCNBox(width: 0.68, height: 0.68, length: 0.68, chamferRadius: 0.075)
+                    let material = SCNMaterial()
+                    let energy = CGFloat(scores[(x + y + z) % 3]) / 100
+                    material.diffuse.contents = NSColor(calibratedRed: 0.12 + energy * 0.12, green: active ? 0.78 + energy * 0.22 : 0.18, blue: 0.58 + energy * 0.32, alpha: active ? 0.86 : 0.16)
+                    material.emission.contents = NSColor(calibratedRed: 0.02, green: active ? 0.17 + energy * 0.18 : 0.02, blue: active ? 0.15 : 0.04, alpha: 1)
+                    material.transparency = active ? 0.92 : 0.28
+                    material.metalness.contents = 0.35
+                    material.roughness.contents = 0.28
+                    box.materials = [material]
+                    let node = SCNNode(geometry: box)
+                    node.position = SCNVector3(Float(x - 1) * 0.88, Float(y) * 0.88 + 0.36, Float(z - 1) * 0.88)
+                    scene.rootNode.addChildNode(node)
+                }
+            }
         }
         let floor = SCNFloor()
-        floor.reflectivity = 0.12
+        floor.reflectivity = 0.22
         floor.firstMaterial?.diffuse.contents = NSColor(calibratedWhite: 0.04, alpha: 1)
         scene.rootNode.addChildNode(SCNNode(geometry: floor))
         let camera = SCNNode()
         camera.camera = SCNCamera()
-        camera.position = SCNVector3(0, 4.5, 7)
-        camera.eulerAngles.x = -.pi / 8
+        camera.camera?.fieldOfView = 44
+        camera.position = SCNVector3(4.8, 4.4, 6.8)
+        let constraint = SCNLookAtConstraint(target: scene.rootNode)
+        constraint.isGimbalLockEnabled = true
+        camera.constraints = [constraint]
         scene.rootNode.addChildNode(camera)
+        let light = SCNNode()
+        light.light = SCNLight()
+        light.light?.type = .omni
+        light.light?.color = NSColor(calibratedRed: 0.35, green: 0.9, blue: 1, alpha: 1)
+        light.light?.intensity = 900
+        light.position = SCNVector3(-3, 6, 4)
+        scene.rootNode.addChildNode(light)
         return scene
     }
 }

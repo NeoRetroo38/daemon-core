@@ -73,4 +73,9 @@ final class SnapshotTests: XCTestCase {
         let state = await DiagnosticCatalog.run(diagnostic)
         guard case .passed = state else { return XCTFail("Expected existing read-only evidence") }
     }
+
+    func testIdentityProjectionReturnsOnlyDisplayNames() {
+        let fixture = #"{"version":1,"accounts":[{"id":"private-id","email":"private@example.test","passwordHash":"secret","profile":{"id":"profile-id","displayName":"Neo","role":"SUPERDEV"}}],"sessions":[{"tokenHash":"secret-token"}]}"#
+        XCTAssertEqual(RepositoryInspector.usernames(from: Data(fixture.utf8)), ["Neo"])
+    }
 }

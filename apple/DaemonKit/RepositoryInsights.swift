@@ -14,10 +14,14 @@ public struct RepositoryInsights: Sendable {
     public let capabilities: [String]
     public let blenderAvailable: Bool
     public let abletonAvailable: Bool
+    public let hasLogin: Bool
+    public let hasDatabase: Bool
+    public let usernames: [String]
 
     public static let empty = RepositoryInsights(
         fileCount: 0, sourceLines: 0, bytes: 0, languages: [], capabilities: [],
-        blenderAvailable: false, abletonAvailable: false
+        blenderAvailable: false, abletonAvailable: false, hasLogin: false,
+        hasDatabase: false, usernames: []
     )
 }
 
@@ -49,6 +53,7 @@ public enum RepositoryInspector {
         var bytes: Int64 = 0
         var languageCounts: [String: Int] = [:]
         var names = Set<String>()
+        var relativePaths = Set<String>()
 
         for case let url as URL in enumerator {
             if ignoredDirectories.contains(url.lastPathComponent) {
@@ -59,6 +64,7 @@ public enum RepositoryInspector {
             files += 1
             bytes += Int64(values.fileSize ?? 0)
             names.insert(url.lastPathComponent)
+            relativePaths.insert(String(url.path.dropFirst(root.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
             guard let language = languageByExtension[url.pathExtension.lowercased()] else { continue }
             languageCounts[language, default: 0] += 1
             if (values.fileSize ?? 0) <= 1_000_000,
@@ -80,6 +86,10 @@ public enum RepositoryInspector {
             .map { LanguageMetric(name: $0.key, files: $0.value) }
             .sorted { $0.files == $1.files ? $0.name < $1.name : $0.files > $1.files }
 
+        let hasLogin = relativePaths.contains(where: { $0.localizedCaseInsensitiveContains("auth") })
+        let hasDatabase = names.contains("schema.prisma") || names.contains("database.ts") || names.contains("database.sql")
+        let usernames = hasLogin && hasDatabase ? localChoisysUsernames() : []
+
         return RepositoryInsights(
             fileCount: files,
             sourceLines: lines,
@@ -88,8 +98,34 @@ public enum RepositoryInspector {
             capabilities: capabilities,
             blenderAvailable: manager.fileExists(atPath: "/Applications/Blender.app"),
             abletonAvailable: manager.fileExists(atPath: "/Applications/Ableton Live 12 Lite.app") ||
-                manager.fileExists(atPath: "/Applications/Ableton Live 11 Lite.app")
+                manager.fileExists(atPath: "/Applications/Ableton Live 11 Lite.app"),
+            hasLogin: hasLogin,
+            hasDatabase: hasDatabase,
+            usernames: usernames
         )
+    }
+
+    private static func localChoisysUsernames() -> [String] {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".choisys/auth-v1.json")
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return usernames(from: data)
+    }
+
+    public static func usernames(from data: Data) -> [String] {
+        guard data.count <= 2 * 1024 * 1024,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["version"] as? Int == 1,
+              let accounts = root["accounts"] as? [[String: Any]] else { return [] }
+        let names = accounts.compactMap { account -> String? in
+            guard let profile = account["profile"] as? [String: Any],
+                  let raw = profile["displayName"] as? String else { return nil }
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.count <= 120,
+                  value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { return nil }
+            return value
+        }
+        return Array(Set(names)).sorted().prefix(200).map { $0 }
     }
 }
 
