@@ -1,0 +1,117 @@
+import Foundation
+import Security
+
+/// API key de Anthropic en el Llavero de macOS. Nunca se escribe en disco,
+/// logs ni UserDefaults.
+public enum AgentKeychain {
+    static let service = "com.scenarys.daemon"
+    static let account = "anthropic-api-key"
+
+    public static func read() -> String? {
+        var item: CFTypeRef?
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    @discardableResult
+    public static func save(_ key: String) -> Bool {
+        delete()
+        let attributes: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                         kSecAttrAccount as String: account, kSecValueData as String: Data(key.utf8),
+                                         kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+    }
+
+    public static func delete() {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    public static var configured: Bool { read() != nil }
+}
+
+public enum AgentSettings {
+    public static var model: String {
+        get { UserDefaults.standard.string(forKey: "daemon.agent.model") ?? "claude-sonnet-5-5" }
+        set { UserDefaults.standard.set(newValue, forKey: "daemon.agent.model") }
+    }
+}
+
+public enum ClaudeAgentError: Error, LocalizedError {
+    case notConfigured, http(Int, String), malformed
+    public var errorDescription: String? {
+        switch self {
+        case .notConfigured: "Sin API key en el Llavero."
+        case .http(let code, let type): "La API respondió \(code) (\(type))."
+        case .malformed: "Respuesta de la API no reconocida."
+        }
+    }
+}
+
+#if os(macOS)
+/// Adaptador opcional a la API de Claude con tool use. Solo ve herramientas
+/// READ del catálogo; nunca una shell.
+public enum ClaudeAgent {
+    static func wireName(_ tool: String) -> String { tool.replacingOccurrences(of: ".", with: "_") }
+
+    static var toolDefinitions: [[String: Any]] {
+        ToolCatalog.all.filter { $0.risk == .read && $0.name != "repo.open" }.map { spec in
+            var properties: [String: Any] = [:]
+            for input in spec.inputs { properties[input.name] = ["type": "string", "description": input.description] }
+            return ["name": wireName(spec.name), "description": "\(spec.description) Salida: \(spec.outputs).",
+                    "input_schema": ["type": "object", "properties": properties, "required": spec.inputs.filter(\.required).map(\.name)]]
+        }
+    }
+
+    public static func respond(to question: String, history: [(role: String, text: String)], context: AgentContext,
+                               digest: String, ecosystem: String) async throws -> ToolOutcome {
+        guard let key = AgentKeychain.read() else { throw ClaudeAgentError.notConfigured }
+        var messages: [[String: Any]] = history.suffix(8).map { ["role": $0.role, "content": $0.text] }
+        messages.append(["role": "user", "content": question])
+        var blocks: [AgentBlock] = []
+        var used: [String] = []
+        var evidences: [Evidence] = []
+        let wireToTool = Dictionary(uniqueKeysWithValues: ToolCatalog.all.map { (wireName($0.name), $0.name) })
+        for _ in 0..<5 {
+            let body: [String: Any] = ["model": AgentSettings.model, "max_tokens": 1200,
+                                       "system": DaemonPersona.systemPrompt(digest: digest, ecosystem: ecosystem),
+                                       "tools": toolDefinitions, "messages": messages]
+            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!, timeoutInterval: 60)
+            request.httpMethod = "POST"
+            request.setValue(key, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await NetworkProbe.session.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClaudeAgentError.malformed }
+            guard code == 200 else { throw ClaudeAgentError.http(code, ((root["error"] as? [String: Any])?["type"] as? String) ?? "error") }
+            let content = root["content"] as? [[String: Any]] ?? []
+            messages.append(["role": "assistant", "content": content])
+            let calls = content.filter { $0["type"] as? String == "tool_use" }
+            if calls.isEmpty || root["stop_reason"] as? String != "tool_use" {
+                let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+                return ToolOutcome(text: text.isEmpty ? "Sin respuesta." : text, blocks: blocks,
+                                   evidence: evidences.isEmpty ? .unverified : Evidence.weakest(evidences), toolsUsed: used)
+            }
+            var results: [[String: Any]] = []
+            for call in calls {
+                guard let id = call["id"] as? String, let wire = call["name"] as? String, let tool = wireToTool[wire],
+                      ToolCatalog.spec(tool)?.risk == .read else { continue }
+                let input = (call["input"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+                let outcome = await ToolExecutor.run(tool, arguments: input, context: context, approval: .automatic)
+                blocks += outcome.blocks.filter { if case .actions = $0 { return false }; return true }
+                used += outcome.toolsUsed
+                evidences.append(outcome.evidence)
+                results.append(["type": "tool_result", "tool_use_id": id, "content": "[\(outcome.evidence.label)] " + String(outcome.digest.prefix(6000))])
+            }
+            messages.append(["role": "user", "content": results])
+        }
+        return ToolOutcome(text: "He alcanzado el límite de pasos de herramientas; esto es lo que medí.", blocks: blocks,
+                           evidence: Evidence.weakest(evidences), toolsUsed: used)
+    }
+}
+#endif

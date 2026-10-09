@@ -1,12 +1,12 @@
 import Foundation
 
-public struct LanguageMetric: Identifiable, Sendable {
+public struct LanguageMetric: Identifiable, Sendable, Codable, Hashable {
     public let name: String
     public let files: Int
     public var id: String { name }
 }
 
-public struct RepositoryInsights: Sendable {
+public struct RepositoryInsights: Sendable, Codable {
     public let fileCount: Int
     public let sourceLines: Int
     public let bytes: Int64
@@ -17,6 +17,10 @@ public struct RepositoryInsights: Sendable {
     public let hasLogin: Bool
     public let hasDatabase: Bool
     public let usernames: [String]
+    public var testFiles: Int = 0
+    public var packageManagers: [String] = []
+    public var buildCommands: [String] = []
+    public var largestFiles: [String] = []
 
     public static let empty = RepositoryInsights(
         fileCount: 0, sourceLines: 0, bytes: 0, languages: [], capabilities: [],
@@ -54,6 +58,8 @@ public enum RepositoryInspector {
         var languageCounts: [String: Int] = [:]
         var names = Set<String>()
         var relativePaths = Set<String>()
+        var testFiles = 0
+        var sizes: [(String, Int)] = []
 
         for case let url as URL in enumerator {
             if ignoredDirectories.contains(url.lastPathComponent) {
@@ -64,7 +70,12 @@ public enum RepositoryInspector {
             files += 1
             bytes += Int64(values.fileSize ?? 0)
             names.insert(url.lastPathComponent)
-            relativePaths.insert(String(url.path.dropFirst(root.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            let relative = String(url.path.dropFirst(root.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            relativePaths.insert(relative)
+            let lowered = relative.lowercased()
+            if languageByExtension[url.pathExtension.lowercased()] != nil,
+               lowered.contains("test") || lowered.contains("spec") || lowered.hasPrefix("tests/") { testFiles += 1 }
+            sizes.append((relative, values.fileSize ?? 0))
             guard let language = languageByExtension[url.pathExtension.lowercased()] else { continue }
             languageCounts[language, default: 0] += 1
             if (values.fileSize ?? 0) <= 1_000_000,
@@ -90,7 +101,19 @@ public enum RepositoryInspector {
         let hasDatabase = names.contains("schema.prisma") || names.contains("database.ts") || names.contains("database.sql")
         let usernames = hasLogin && hasDatabase ? localChoisysUsernames() : []
 
-        return RepositoryInsights(
+        var managers: [String] = []
+        if names.contains("package-lock.json") { managers.append("npm") }
+        if names.contains("pnpm-lock.yaml") { managers.append("pnpm") }
+        if names.contains("yarn.lock") { managers.append("yarn") }
+        if names.contains("Package.swift") { managers.append("SwiftPM") }
+        if names.contains("CMakeLists.txt") { managers.append("CMake") }
+        if names.contains("Makefile") { managers.append("make") }
+        var builds: [String] = []
+        if relativePaths.contains("Package.swift") { builds.append("swift test") }
+        if relativePaths.contains("CMakeLists.txt") { builds.append("cmake --build && ctest") }
+        if relativePaths.contains("Makefile") { builds.append("make test") }
+        if relativePaths.contains("package.json") { builds.append("npm test") }
+        var result = RepositoryInsights(
             fileCount: files,
             sourceLines: lines,
             bytes: bytes,
@@ -103,6 +126,11 @@ public enum RepositoryInspector {
             hasDatabase: hasDatabase,
             usernames: usernames
         )
+        result.testFiles = testFiles
+        result.packageManagers = managers
+        result.buildCommands = builds
+        result.largestFiles = sizes.sorted { $0.1 > $1.1 }.prefix(5).map { "\($0.0) · \(ByteCountFormatter.string(fromByteCount: Int64($0.1), countStyle: .file))" }
+        return result
     }
 
     private static func localChoisysUsernames() -> [String] {
