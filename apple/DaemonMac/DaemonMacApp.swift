@@ -97,7 +97,7 @@ struct MacDashboard: View {
                         ForEach(model.repositoryPaths, id: \.self) { path in
                             HStack(spacing: 7) {
                                 Circle().fill(DaemonPalette.green).frame(width: 5, height: 5)
-                                Text(URL(fileURLWithPath: path).lastPathComponent)
+                                Text(repositoryName(path))
                                     .font(.caption.monospaced()).lineLimit(1)
                                 Spacer(minLength: 0)
                                 Button {
@@ -164,5 +164,12 @@ struct MacDashboard: View {
         model.addRepository(pendingPath)
         pendingPath = ""
         Task { await model.refresh() }
+    }
+
+    private func repositoryName(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        return url.lastPathComponent == "repo"
+            ? url.deletingLastPathComponent().lastPathComponent
+            : url.lastPathComponent
     }
 }

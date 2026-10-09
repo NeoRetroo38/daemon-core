@@ -20,8 +20,9 @@ case "${DAEMON_APPLE_BUILD_DRIVER:-direct}" in
         ;;
     *) printf '%s\n' 'DAEMON_APPLE_BUILD_DRIVER must be direct or swiftpm.' >&2; exit 1 ;;
 esac
-mkdir -p "$app_path/Contents/MacOS"
+mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 install -m 755 "$bin_path/DaemonMac" "$app_path/Contents/MacOS/Daemon"
 install -m 644 "$repo_root/apple/DaemonMac/Info.plist" "$app_path/Contents/Info.plist"
+install -m 644 "$repo_root/apple/DaemonMac/Assets/Daemon.icns" "$app_path/Contents/Resources/Daemon.icns"
 plutil -lint "$app_path/Contents/Info.plist"
 printf '%s\n' "$app_path"
