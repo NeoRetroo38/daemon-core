@@ -165,7 +165,7 @@ public struct MetricCubeView: NSViewRepresentable {
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 38
-        camera.position = SCNVector3(3.9, 2.6, 5.4)
+        camera.position = SCNVector3(4.5, 3.0, 6.3)
         let look = SCNLookAtConstraint(target: root)
         look.isGimbalLockEnabled = true
         camera.constraints = [look]

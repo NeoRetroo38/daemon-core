@@ -27,5 +27,15 @@ La API de choisys envía las decisiones de cada fase y recibe la confirmación; 
 - Cubo 3×3×3 para cruzar densidad de código, estado Git y capacidad operativa.
 - Proyección de usuarios limitada al nombre visible en repos con login y DB.
 - Detección de Blender y Ableton Live Lite como estudio creativo local.
-- Chat Nexo con personalidad inmutable y contexto del repositorio seleccionado.
+- Chat con personalidad inmutable y contexto del repositorio seleccionado (agente renombrado a Daemon).
 - Daemon continúa sin escribir código, ejecutar shell ni controlar servicios.
+
+# 9 de octubre de 2026 — control plane, Clod y dirección de arte (rama claude/control-plane)
+
+- Núcleo C++: gate de políticas para herramientas de observación y túneles solo loopback; C ABI 0.2.0.
+- Capa Control: puertos, procesos, Tailscale, sondas HTTP/TCP con p50/p95/p99, topología declarada, índice local con huella.
+- Agente Daemon con 26 herramientas declaradas, router en español sin tokens y adaptador Claude opcional (solo lectura).
+- Clod: Claude dentro de Daemon con memoria compartida, bitácora y buzón para sesiones de Claude.
+- Mapa vivo, cubo 3D en el idioma del Cubo de Neo, vistas Sistema, Red y Tecnología (versión y licencia verificables).
+- Cube Link: Cubo del Desktop disponible en 127.0.0.1:8765 del Mac por túnel SSH sobre Tailscale.
+- Dirección de arte desde kill-aesthetics; arranque renderizado con Blender; SFX generados y sustituibles desde Ableton.
