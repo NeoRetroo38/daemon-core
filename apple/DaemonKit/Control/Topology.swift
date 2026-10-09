@@ -29,6 +29,8 @@ public struct ServiceDefinition: Codable, Sendable, Identifiable, Hashable {
     public let loopbackOnly: Bool
     /// Publicado a propósito en la tailnet (p. ej. demo remota).
     public let tailnetPublished: Bool
+    /// URL por la que se publica en el Desktop (Tailscale Serve). `{desktop}` = nombre MagicDNS.
+    public var remoteURL: String? = nil
 }
 
 public struct TopologyConfig: Codable, Sendable {
@@ -44,15 +46,15 @@ public struct TopologyConfig: Codable, Sendable {
         workspaceRoot: "~/Desktop/scenarys",
         githubOwner: "NeoRetroo38",
         services: [
-            ServiceDefinition(id: "landing", name: "Landing Scenarys", role: .landing, machines: [.mac], port: 5173, healthPath: "/", url: nil,
+            ServiceDefinition(id: "landing", name: "Landing Scenarys", role: .landing, machines: [.mac, .desktop], port: 5173, healthPath: "/", url: nil,
                               repository: "scenarys", technologies: ["Vite", "React", "TypeScript"], dependsOn: ["choisys-web"],
-                              loopbackOnly: false, tailnetPublished: true),
+                              loopbackOnly: false, tailnetPublished: true, remoteURL: "https://{desktop}/"),
             ServiceDefinition(id: "choisys-web", name: "choisys web", role: .frontend, machines: [.mac, .desktop], port: 8081, healthPath: "/", url: nil,
                               repository: "choisys", technologies: ["Expo", "React Native Web", "TypeScript"], dependsOn: ["choisys-api"],
-                              loopbackOnly: false, tailnetPublished: true),
+                              loopbackOnly: false, tailnetPublished: true, remoteURL: "https://{desktop}:9444/"),
             ServiceDefinition(id: "choisys-api", name: "choisys API", role: .api, machines: [.mac, .desktop], port: 3000, healthPath: "/health", url: nil,
-                              repository: "choisys", technologies: ["Node", "Express 5", "Prisma", "TypeScript"], dependsOn: ["neon", "neo-cube"],
-                              loopbackOnly: false, tailnetPublished: true),
+                              repository: "choisys", technologies: ["Node", "Express 5", "Prisma", "TypeScript", "Tailscale Serve/Funnel :8443"], dependsOn: ["neon", "neo-cube"],
+                              loopbackOnly: false, tailnetPublished: true, remoteURL: "https://{desktop}:8443/health"),
             ServiceDefinition(id: "neo-cube", name: "Cubo de Neo", role: .engine, machines: [.mac, .desktop], port: 8765, healthPath: "/health", url: nil,
                               repository: "cubo-de-neo", technologies: ["C++17", "sockets POSIX/Winsock"], dependsOn: [],
                               loopbackOnly: true, tailnetPublished: false),
@@ -76,7 +78,15 @@ public struct TopologyConfig: Codable, Sendable {
     /// valores declarados la primera vez; Neo puede editarlo.
     public static func load() -> TopologyConfig {
         let url = DaemonStore.directory.appendingPathComponent("topology.json")
-        if let data = try? Data(contentsOf: url), let value = try? JSONDecoder().decode(TopologyConfig.self, from: data) { return value }
+        if let data = try? Data(contentsOf: url), var value = try? JSONDecoder().decode(TopologyConfig.self, from: data) {
+            // Migración: completa con los valores declarados lo que el archivo no traiga (p. ej. remoteURL).
+            var changed = false
+            for index in value.services.indices where value.services[index].remoteURL == nil {
+                if let known = standard.service(value.services[index].id)?.remoteURL { value.services[index].remoteURL = known; changed = true }
+            }
+            if changed { DaemonStore.write(value, to: "topology.json") }
+            return value
+        }
         DaemonStore.write(standard, to: "topology.json")
         return standard
     }
