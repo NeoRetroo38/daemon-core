@@ -204,6 +204,7 @@ bool systemRead(std::string_view program, const std::vector<std::string>& argume
         return false;
     }
     if (program == "gh") {
+        if (arguments == std::vector<std::string>{"--version"}) return true;
         if (arguments.size() < 2) return false;
         const auto noun = arguments[0], verb = arguments[1];
         const bool listing = (inSet(noun, {"pr", "issue", "run", "release"}) && verb == "list") ||
