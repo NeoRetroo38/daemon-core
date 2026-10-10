@@ -1,8 +1,8 @@
 # daemon-core
 
-Repositorio **privado** con todas las herramientas C++ del Cubo de Neo (scenarys S.L.), hechas por neo, Codex y Claude. Solo el dueño tiene acceso.
+Repositorio **público** de Daemon (app nativa para Mac e iPhone y su núcleo) y de las herramientas C++ del Cubo de Neo (scenarys S.L.), hechas por neo, Codex y Claude. No contiene secretos: las credenciales viven fuera del repositorio.
 
-> Es una instantánea de trabajo del 8 de octubre de 2026. El motor público sigue viviendo en [`neos-cube`](https://github.com/NeoRetroo38/neos-cube) y el producto en [`choisys`](https://github.com/NeoRetroo38/choisys); aquí se junta todo en un sitio. No hay inferencia: espera una especificación matemática aprobada (`docs/INFERENCE_ARCHITECTURE.md`).
+> Instantánea de trabajo, actualizada el 10 de octubre de 2026. El motor público sigue viviendo en [`neos-cube`](https://github.com/NeoRetroo38/neos-cube) y el producto en [`choisys`](https://github.com/NeoRetroo38/choisys); aquí se junta todo en un sitio. No hay inferencia: espera una especificación matemática aprobada (`docs/INFERENCE_ARCHITECTURE.md`).
 
 ## Daemon operativo — núcleo nativo
 
