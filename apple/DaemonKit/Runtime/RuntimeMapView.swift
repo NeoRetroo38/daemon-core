@@ -106,46 +106,73 @@ public struct RuntimeMapView: View {
         }
     }
 
-    // MARK: Disposición (fracciones del lienzo, como la maqueta de Neo)
+    // MARK: Disposición (fracciones del lienzo medidas sobre la maqueta de Neo)
 
     func layout(_ size: CGSize) -> [String: CGPoint] {
         func at(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x * size.width, y: y * size.height) }
-        var points: [String: CGPoint] = [Self.github: at(0.5, 0.15), Self.internet: at(0.5, 0.36), Self.tailnet: at(0.5, 0.58)]
+        var points: [String: CGPoint] = [Self.github: at(0.44, 0.13), Self.internet: at(0.44, 0.34), Self.tailnet: at(0.44, 0.56)]
         for machine in topology.machines {
             switch machine.role {
-            case .mac: points[machine.id] = at(0.2, 0.46)
-            case .desktop: points[machine.id] = at(0.7, 0.44)
+            case .mac: points[machine.id] = at(0.11, 0.44)
+            case .desktop: points[machine.id] = at(0.71, 0.46)
             default:
-                let phones = topology.machines.filter { $0.role == .iphone }
-                let index = phones.firstIndex(of: machine) ?? 0
-                points[machine.id] = at(0.4 - Double(index) * 0.12, 0.72)
+                let index = topology.machines.filter { $0.role == .iphone }.firstIndex(of: machine) ?? 0
+                points[machine.id] = at(0.44 - Double(index) * 0.14, 0.78)
             }
         }
         for service in topology.services(on: .mac) { points[service.id] = points["m:mac"] }
-        // Columna derecha: lo que sirve el Desktop y sus dependencias externas.
-        let column = topology.services.filter { ($0.host == .desktop && $0.kind != .engine) || ($0.host == .external && $0.id != Self.github) }
+        // Columna derecha, de arriba abajo como en la maqueta.
         for (index, service) in column.enumerated() {
-            points[service.id] = at(0.86, 0.2 + Double(index) * (0.6 / Double(max(column.count - 1, 1))))
+            let x = [0.88, 0.93, 0.93, 0.9][min(index, 3)]
+            points[service.id] = at(x, 0.2 + Double(index) * 0.22)
         }
-        // El Cubo, bajo el Desktop: solo loopback.
-        for engine in topology.services where engine.kind == .engine && engine.host == .desktop {
-            points[engine.id] = at(0.62, 0.8)
-        }
+        if let cube { points[cube.id] = at(0.7, 0.86) }
         return points
     }
 
-    /// Enlaces estructurales que la maqueta dibuja y la topología no mide: siempre «no medida».
-    var structuralLinks: [RuntimeLink] {
+    /// Lo que sirve el Desktop y sus dependencias: API, Neon, web, landing.
+    var column: [RuntimeService] {
+        let order = ["choisys-api", "neon", "choisys-web", "website"]
+        let list = topology.services.filter { ($0.host == .desktop && $0.kind == .service) || ($0.host == .external && $0.id != Self.github) }
+        return list.sorted { a, b in
+            (order.firstIndex { a.id.contains($0) } ?? 9) < (order.firstIndex { b.id.contains($0) } ?? 9)
+        }
+    }
+
+    var cube: RuntimeService? { topology.services.first { $0.kind == .engine && $0.host == .desktop } }
+
+    /// Desktop ↔ tailnet: la latencia más baja medida a un servicio del Desktop por la tailnet.
+    var desktopLatency: Int? { topology.services(on: .desktop).compactMap(\.latencyMs).min() }
+
+    static func ms(_ value: Int?) -> String { value.map { "\($0) ms" } ?? "" }
+
+    /// Enlaces del mapa: solo los de la maqueta. El resto vive en el inspector.
+    var mapLinks: [RuntimeLink] {
+        func link(_ from: String, _ to: String, _ transport: Transport, _ label: String, _ state: Evidence) -> RuntimeLink {
+            RuntimeLink(from: from, to: to, transport: transport, label: label, state: state, warning: nil, provenanceOnly: false)
+        }
         var links: [RuntimeLink] = []
         let github = topology.service(Self.github)
-        links.append(RuntimeLink(from: Self.github, to: Self.internet, transport: .https,
-                                 label: github?.latencyMs.map { "\($0) ms" } ?? "", state: github?.state ?? .unverified, warning: nil, provenanceOnly: false))
-        for machine in topology.machines where machine.role != .iphone {
-            links.append(RuntimeLink(from: machine.id, to: Self.internet, transport: .https, label: "", state: .unverified, warning: nil, provenanceOnly: false))
+        links.append(link(Self.github, Self.internet, .https, Self.ms(github?.latencyMs), github?.state ?? .unverified))
+        links.append(link(Self.internet, Self.tailnet, .internet, "", .unverified))
+        for machine in topology.machines {
+            // Ping real de la tailnet; si no hay, para el Desktop vale la latencia a sus servicios por la tailnet.
+            let label = Self.ms(machine.latencyMs ?? (machine.role == .desktop ? desktopLatency : nil))
+            links.append(link(machine.id, Self.tailnet, .tailscale, label, machine.state == .verified ? .verified : machine.state))
+            if machine.role != .iphone {
+                // Salida a internet: la deducimos de las sondas que sí responden, no se mide el salto.
+                links.append(link(machine.id, Self.internet, .https, machine.role == .mac ? Self.ms(github?.latencyMs) : "", .partial))
+            }
         }
-        for service in topology.services(on: .desktop) where service.kind == .service {
-            links.append(RuntimeLink(from: "m:desktop", to: service.id, transport: .https,
-                                     label: service.latencyMs.map { "\($0) ms" } ?? "", state: service.state, warning: nil, provenanceOnly: false))
+        for service in column {
+            let transport: Transport = service.id.contains("neon") ? .postgres : .https
+            links.append(link("m:desktop", service.id, transport, Self.ms(service.latencyMs), service.state))
+        }
+        if let cube {
+            links.append(link("m:desktop", cube.id, .loopback, "127.0.0.1:8765", cube.state == .failed ? .failed : .verified))
+            if let tunnel = topology.links.first(where: { $0.from == "m:mac" && $0.to == cube.id }) {
+                links.append(link("m:mac", cube.id, .ssh, "Daemon · túnel", tunnel.state))
+            }
         }
         return links
     }
@@ -153,19 +180,21 @@ public struct RuntimeMapView: View {
     // MARK: Dibujo
 
     func drawLinks(_ context: GraphicsContext, points: [String: CGPoint], phase: Double) {
-        for link in structuralLinks + topology.links where !link.provenanceOnly || showProvenance {
+        for link in mapLinks {
             guard let a = points[link.from], let b = points[link.to], a != b else { continue }
             let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
-            let control = CGPoint(x: mid.x - (b.y - a.y) * 0.08, y: mid.y + (b.x - a.x) * 0.08)
+            // Rectas si van en vertical u horizontal; curvas suaves si cruzan en diagonal.
+            let bend: CGFloat = abs(a.x - b.x) < 8 || abs(a.y - b.y) < 8 ? 0 : 0.18
+            let control = CGPoint(x: mid.x + (b.x - a.x) * bend, y: mid.y - (b.y - a.y) * bend)
             var path = Path()
             path.move(to: a)
             path.addQuadCurve(to: b, control: control)
-            let color: Color = link.warning != nil ? DaemonPalette.amber : (link.state == .failed ? DaemonPalette.red : DaemonPalette.green)
-            let glow = link.state == .verified ? 0.95 : 0.55
+            let color: Color = link.state == .failed ? DaemonPalette.red : DaemonPalette.green
             if link.state == .verified {
                 context.stroke(path, with: .color(color.opacity(0.18)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
             }
-            context.stroke(path, with: .color(color.opacity(glow)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: Self.dash(link.state)))
+            context.stroke(path, with: .color(color.opacity(link.state == .verified ? 0.95 : 0.6)),
+                           style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: Self.dash(link.state)))
             if link.state == .verified {
                 let speed = link.transport == .tailscale ? 0.18 : 0.35
                 let t = (phase * speed + Double(abs(link.id.hashValue % 97)) / 97).truncatingRemainder(dividingBy: 1)
@@ -173,15 +202,12 @@ public struct RuntimeMapView: View {
                 let p = CGPoint(x: u * u * a.x + 2 * u * t * control.x + t * t * b.x, y: u * u * a.y + 2 * u * t * control.y + t * t * b.y)
                 context.fill(Path(ellipseIn: CGRect(x: p.x - 2.5, y: p.y - 2.5, width: 5, height: 5)), with: .color(color))
             }
-            guard !compact || link.warning != nil else { continue }
-            let title = (link.warning != nil ? "⚠ " : "") + (link.transport == .observation ? "sonda" : link.transport.label)
+            guard !compact, link.transport != .internet else { continue }
+            let title = link.transport == .postgres ? "TLS" : link.transport.label
             let resolved = context.resolve(Text(title + (link.label.isEmpty ? "" : "\n" + link.label))
-                .font(.system(size: 10, design: .monospaced)).foregroundColor(color))
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced)).foregroundColor(color))
             let curveMid = CGPoint(x: 0.25 * a.x + 0.5 * control.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * control.y + 0.25 * b.y)
-            let box = resolved.measure(in: CGSize(width: 220, height: 60))
-            context.fill(Path(CGRect(x: curveMid.x - box.width / 2 - 4, y: curveMid.y - box.height / 2 - 2, width: box.width + 8, height: box.height + 4)),
-                         with: .color(Color.black.opacity(0.85)))
-            context.draw(resolved, at: curveMid)
+            context.draw(resolved, at: CGPoint(x: curveMid.x + 26, y: curveMid.y - 12))
         }
     }
 
@@ -190,26 +216,34 @@ public struct RuntimeMapView: View {
     func hub(_ id: String, _ name: String, _ icon: String, _ points: [String: CGPoint]) -> some View {
         Group {
             if let point = points[id] {
-                Card(icon: icon, title: name, state: nil, lines: [], bullets: [], compact: compact).position(point)
+                let online = topology.machines.filter { $0.state == .verified }.count
+                Card(icon: icon, title: name, state: id == Self.tailnet ? .verified : nil,
+                     lines: id == Self.tailnet ? ["\(online) nodos"] : [], bullets: [], compact: compact).position(point)
             }
         }
     }
 
     func machineNode(_ machine: RuntimeMachine, at point: CGPoint, unit: CGFloat) -> some View {
-        let radius = unit * (machine.role == .iphone ? 0.045 : 0.065)
-        let icon = machine.role == .mac ? "laptopcomputer" : (machine.role == .desktop ? "desktopcomputer" : "iphone")
-        let bullets = topology.services(on: machine.role).filter { $0.kind != .engine }.map(\.name)
-            + topology.services.filter { $0.kind == .engine && $0.host == machine.role }.map(\.name)
-        return ZStack {
-            Circle().fill(DaemonPalette.green.opacity(0.06)).frame(width: radius * 2, height: radius * 2)
-            Circle().stroke(DaemonPalette.color(machine.state).opacity(0.85), lineWidth: 1.4).frame(width: radius * 2, height: radius * 2)
-                .shadow(color: DaemonPalette.green.opacity(machine.state == .verified ? 0.5 : 0), radius: 10)
-            Circle().stroke(DaemonPalette.green.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [2, 5]))
-                .frame(width: radius * 2.6, height: radius * 2.6)
-            Image(systemName: icon).font(.system(size: radius * 0.6)).foregroundStyle(DaemonPalette.ink)
-            Card(icon: nil, title: machine.name, state: machine.state, lines: [machine.address].compactMap { $0 }, bullets: bullets, compact: compact)
-                .offset(y: radius + 54)
+        let radius = unit * 0.075
+        let (icon, os) = machine.role == .mac ? ("laptopcomputer", "apple.logo") : (machine.role == .desktop ? ("desktopcomputer", "pc") : ("iphone", "iphone"))
+        let bullets = machine.role == .iphone ? [] : topology.services(on: machine.role).map(\.name)
+        return ZStack(alignment: .top) {
+            if machine.role != .iphone {
+                Circle().fill(DaemonPalette.green.opacity(0.04)).frame(width: radius * 5, height: radius * 5).offset(y: -radius * 1.5)
+                Circle().stroke(DaemonPalette.green.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [2, 5]))
+                    .frame(width: radius * 5, height: radius * 5).offset(y: -radius * 1.5)
+            }
+            ZStack {
+                Circle().fill(Color.black)
+                Circle().stroke(DaemonPalette.color(machine.state), lineWidth: 1.6)
+                    .shadow(color: DaemonPalette.green.opacity(machine.state == .verified ? 0.7 : 0), radius: 12)
+                Image(systemName: icon).font(.system(size: radius * 0.7)).foregroundStyle(DaemonPalette.ink)
+            }
+            .frame(width: radius * 2, height: radius * 2)
+            Card(icon: os, title: machine.name, state: machine.state, lines: [machine.address].compactMap { $0 }, bullets: bullets, compact: compact)
+                .offset(y: radius * 2 + 4)
         }
+        .frame(width: radius * 2, height: radius * 2, alignment: .top)
         .position(point)
         .onTapGesture { selection = machine.id }
     }
@@ -221,10 +255,11 @@ public struct RuntimeMapView: View {
         case .external: icon = service.id.contains("neon") ? "cylinder.split.1x2" : (service.id == Self.github ? "chevron.left.forwardslash.chevron.right" : "globe")
         default: icon = service.id.contains("choisys") ? "cube" : "circle.hexagongrid"
         }
-        var lines = [service.health]
-        if service.kind == .engine { lines.append(service.bind.map { "\($0):\(service.port.map(String.init) ?? "")" } ?? "") }
-        else if let latency = service.latencyMs { lines.append("\(latency) ms" + (service.port.map { " · :\($0)" } ?? "")) }
-        return Card(icon: icon, title: service.name, state: service.state, lines: lines.filter { !$0.isEmpty }, bullets: [],
+        // GitHub, como en la maqueta: solo la latencia; el resto ya lleva el código HTTP y la latencia en `health`.
+        var lines = service.id == Self.github ? [Self.ms(service.latencyMs)] : [service.health]
+        if service.id != Self.github, let port = service.port { lines.append(":\(port)") }
+        let bullets = service.id == Self.github ? ["Repositorios", "CI/CD", "Releases"] : []
+        return Card(icon: icon, title: service.name, state: service.state, lines: lines.filter { !$0.isEmpty }, bullets: bullets,
                     compact: compact, selected: selection == service.id, warning: service.warning, accent: service.kind == .engine)
     }
 }

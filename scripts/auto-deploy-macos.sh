@@ -1,10 +1,11 @@
 #!/bin/bash
 # Despliegue al fusionar: si origin/main cambió, prueba, compila e instala Daemon.app.
-# Compila en un worktree aparte: nunca toca la copia de trabajo ni las ramas en curso.
+# Compila en un clon propio fuera de ~/Desktop: launchd no tiene permiso (TCC) para leer el Escritorio,
+# y así nunca toca la copia de trabajo ni las ramas en curso.
 # Si algo falla no instala nada y avisa. Lo lanza launchd cada 2 min (com.scenarys.daemon-deploy).
 set -uo pipefail
 
-repo="${DAEMON_REPO:-$HOME/Desktop/scenarys/daemon-core}"
+remote="${DAEMON_REMOTE:-https://github.com/NeoRetroo38/daemon-core.git}"
 state="$HOME/Library/Application Support/Daemon/deploy"
 src="$state/src"
 log="$HOME/.choisys-logs/deploy.log"
@@ -17,8 +18,11 @@ notify() { osascript -e "display notification \"$1\" with title \"Daemon\"" >/de
 mkdir "$state/lock" 2>/dev/null || exit 0
 trap 'rmdir "$state/lock"' EXIT
 
-git -C "$repo" fetch -q origin main || { say "fetch falló"; exit 0; }
-target="$(git -C "$repo" rev-parse origin/main)"
+# Un worktree antiguo apunta al repo del Escritorio, que launchd no puede leer: se sustituye por un clon.
+[ -f "$src/.git" ] && rm -rf "$src"
+[ -d "$src/.git" ] || git clone -q "$remote" "$src" 2>>"$log" || { say "clone falló"; exit 0; }
+git -C "$src" fetch -q origin main 2>>"$log" || { say "fetch falló"; exit 0; }
+target="$(git -C "$src" rev-parse origin/main)"
 deployed="$(cat "$state/deployed" 2>/dev/null || true)"
 [ "$target" = "$deployed" ] && exit 0
 # Un commit que ya falló no se reintenta en bucle; se reintenta cuando llegue otro.
@@ -26,11 +30,7 @@ deployed="$(cat "$state/deployed" 2>/dev/null || true)"
 
 short="${target:0:7}"
 say "main $short: desplegando"
-if [ -d "$src" ]; then
-    git -C "$src" checkout -q --detach "$target"
-else
-    git -C "$repo" worktree add -q --detach "$src" "$target"
-fi
+git -C "$src" checkout -q --force --detach "$target"
 
 run() { (cd "$src" && "$@") >> "$log" 2>&1; }
 if run swift test && run bash scripts/apple-build-macos.sh && run bash scripts/install-daemon-macos.sh; then

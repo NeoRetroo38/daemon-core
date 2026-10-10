@@ -40,6 +40,7 @@ public struct RuntimeMachine: Identifiable, Sendable, Hashable {
     public let address: String?
     public let state: Evidence
     public let detail: String
+    public var latencyMs: Int? = nil
 }
 
 /// Un componente que se está ejecutando (o que debería y no responde).
@@ -118,7 +119,7 @@ public struct RuntimeTopology: Sendable {
         if let desktopPeer {
             machines.append(RuntimeMachine(id: "m:desktop", role: .desktop, name: "Desktop", address: desktopPeer.ipv4,
                                            state: desktopPeer.online ? .verified : .failed,
-                                           detail: "\(desktopPeer.shortName) · \(desktopPeer.online ? "en línea" : "desconectado") · host operativo"))
+                                           detail: "\(desktopPeer.shortName) · \(desktopPeer.online ? "en línea" : "desconectado") · host operativo", latencyMs: desktopPeer.latencyMs))
         } else {
             // El PC existe aunque no se pueda medir: se dibuja como DESCONOCIDO, no se oculta.
             machines.append(RuntimeMachine(id: "m:desktop", role: .desktop, name: "Desktop", address: nil, state: .unverified,
@@ -126,7 +127,7 @@ public struct RuntimeTopology: Sendable {
         }
         for (index, phone) in tailnet.peers.filter({ !$0.isSelf && $0.os.lowercased() == "ios" }).prefix(2).enumerated() {
             machines.append(RuntimeMachine(id: "m:iphone\(index)", role: .iphone, name: "iPhone", address: phone.ipv4,
-                                           state: phone.online ? .verified : .unverified, detail: "\(phone.shortName) · \(phone.online ? "en línea" : "desconectado")"))
+                                           state: phone.online ? .verified : .unverified, detail: "\(phone.shortName) · \(phone.online ? "en línea" : "desconectado")", latencyMs: phone.latencyMs))
         }
 
         func source(_ repository: String?) -> SourceRepository? { Self.source(repository, config: config, catalog: catalog, verified: sources) }
