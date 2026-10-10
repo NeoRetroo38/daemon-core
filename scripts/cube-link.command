@@ -53,15 +53,17 @@ for p in (d.get("Peer") or {}).values():
 [ -n "$PC_IP" ] || fail "No veo $DESKTOP en la tailnet. ¿Está encendido y con Tailscale conectado?"
 echo "  Desktop en la tailnet: $PC_IP"
 
-if [ ! -f "$HOME/.ssh/id_ed25519" ]; then
+KEY="$HOME/.ssh/id_ed25519_cubelink"
+if [ ! -f "$KEY" ]; then KEY="$HOME/.ssh/id_ed25519"; fi
+if [ ! -f "$KEY" ]; then
   say "Creando tu clave SSH (ed25519)…"
-  ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" -C "neo-mac-cubelink" >/dev/null
+  ssh-keygen -t ed25519 -N "" -f "$KEY" -C "neo-mac-cubelink" >/dev/null
 fi
 echo "  Clave pública (pégala en el Desktop si aún no está autorizada):"
-echo "  $(cat "$HOME/.ssh/id_ed25519.pub")"
+echo "  $(cat "$KEY.pub")"
 
 say "Probando SSH sin contraseña…"
-if ! ssh -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$USER_PC@$PC_IP" exit 2>/dev/null; then
+if ! ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$USER_PC@$PC_IP" exit 2>/dev/null; then
   fail "SSH no entra todavía. En el Desktop, como administrador: daemon-core/scripts/windows/enable-openssh-tailnet.ps1 -PublicKey '<la clave de arriba>'"
 fi
 if lsof -nP -iTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; then
@@ -76,6 +78,7 @@ cat > "$PLIST" <<PL
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array>
     <string>/usr/bin/ssh</string><string>-N</string>
+    <string>-i</string><string>$KEY</string><string>-o</string><string>IdentitiesOnly=yes</string>
     <string>-L</string><string>127.0.0.1:8765:127.0.0.1:8765</string>
     <string>-o</string><string>ExitOnForwardFailure=yes</string>
     <string>-o</string><string>BatchMode=yes</string>

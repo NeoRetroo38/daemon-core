@@ -137,8 +137,16 @@ public struct RuntimeTopology: Sendable {
                                        latencyMs: nil, pid: Int(ProcessInfo.processInfo.processIdentifier), uptime: nil, lastCheck: snapshot.observedAt,
                                        source: source("daemon-core"), technologies: ["SwiftUI", "C++20"], warning: nil))
 
+        // Cube Link: si :8765 en el Mac lo atiende ssh, no es un Cubo local sino el túnel al del PC.
+        let tunnelStatus = snapshot.services.first {
+            $0.machine == .mac && $0.definition.id == "neo-cube" && $0.listener?.command.lowercased().hasPrefix("ssh") == true
+        }
+        let tunnelCode = tunnelStatus?.probe?.statusCode
+        let tunnelAlive = tunnelStatus?.probe?.reachable == true && (tunnelCode == 200 || tunnelCode == 401)
+
         // Servicios del Mac: solo si hay un listener real.
         for status in snapshot.services where status.machine == .mac {
+            if status.id == tunnelStatus?.id { continue }
             guard let listener = status.listener else { continue }
             let definition = status.definition
             services.append(RuntimeService(id: "s:\(status.id)", name: definition.name, kind: definition.role == .engine ? .engine : .service,
@@ -165,10 +173,12 @@ public struct RuntimeTopology: Sendable {
                 let definition = status.definition
                 if definition.loopbackOnly {
                     let exposed = status.alive
+                    let viaTunnel = tunnelAlive && !exposed
                     services.append(RuntimeService(id: "s:\(status.id)", name: definition.name, kind: .engine, host: .desktop, port: definition.port,
-                                                   bind: "127.0.0.1", bindEvidence: exposed ? "¡acepta conexiones por la tailnet!" : "cerrado por la tailnet (medido)",
-                                                   published: nil, protocolName: "HTTP + Bearer", state: exposed ? .failed : .unverified,
-                                                   health: exposed ? "EXPUESTO" : "aislado · salud solo vía API", latencyMs: nil, pid: nil, uptime: nil,
+                                                   bind: "127.0.0.1", bindEvidence: exposed ? "¡acepta conexiones por la tailnet!" : (viaTunnel ? "cerrado por la tailnet (medido) · alcanzado por Cube Link" : "cerrado por la tailnet (medido)"),
+                                                   published: nil, protocolName: "HTTP + Bearer", state: exposed ? .failed : (viaTunnel ? .verified : .unverified),
+                                                   health: exposed ? "EXPUESTO" : (viaTunnel ? "vivo vía túnel SSH · exige token (HTTP \(tunnelCode ?? 0))" : "aislado · salud solo vía API"),
+                                                   latencyMs: tunnelStatus?.probe?.latencyMs, pid: nil, uptime: nil,
                                                    lastCheck: status.probe?.provenance.observedAt, source: source(definition.repository),
                                                    technologies: definition.technologies, warning: exposed ? "contrato de aislamiento roto" : nil))
                     continue
@@ -221,6 +231,9 @@ public struct RuntimeTopology: Sendable {
         let api = services.first { $0.host == .desktop && $0.id.hasPrefix("s:choisys-api") } ?? services.first { $0.id.hasPrefix("s:choisys-api") }
         let web = services.first { $0.host == .desktop && $0.id.hasPrefix("s:choisys-web") } ?? services.first { $0.id.hasPrefix("s:choisys-web") }
         let cube = services.first { $0.host == .desktop && $0.kind == .engine } ?? services.first { $0.kind == .engine }
+        if tunnelAlive, let cube {
+            links.append(RuntimeLink(from: "s:daemon", to: cube.id, transport: .ssh, label: "túnel 127.0.0.1:8765", state: .verified, warning: nil, provenanceOnly: false))
+        }
         if let api, let web {
             links.append(RuntimeLink(from: web.id, to: api.id, transport: .https, label: ":8443", state: Evidence.weakest([web.state, api.state]), warning: nil, provenanceOnly: false))
         }
