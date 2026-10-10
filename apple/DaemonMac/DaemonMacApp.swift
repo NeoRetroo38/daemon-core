@@ -317,7 +317,7 @@ struct OverviewView: View {
             if let ecosystem = model.ecosystem {
                 let topology = RuntimeTopology.build(ecosystem, config: model.config, catalog: model.repositories, sources: model.sources)
                 HStack(alignment: .top, spacing: 14) {
-                    RuntimeMapView(topology: topology, selection: $selection, showProvenance: $showProvenance).frame(height: 540)
+                    RuntimeMapView(topology: topology, selection: $selection, showProvenance: $showProvenance).frame(height: 720)
                         .overlay(Scanlines(opacity: 0.04)).cornerBrackets()
                     if let selection, topology.service(selection) != nil || topology.machines.contains(where: { $0.id == selection }) {
                         RuntimeInspector(topology: topology, id: selection).frame(width: 300)
