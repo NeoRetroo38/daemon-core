@@ -84,6 +84,8 @@ public struct RuntimeTopology: Sendable {
     public let services: [RuntimeService]
     public let links: [RuntimeLink]
     public let observedAt: Date
+    /// Aviso global cuando una parte del mapa no se puede medir (p. ej. Tailscale parado).
+    public let notice: String?
 
     public func service(_ id: String) -> RuntimeService? { services.first { $0.id == id } }
     public func services(on host: MachineRole) -> [RuntimeService] { services.filter { $0.host == host } }
@@ -117,6 +119,10 @@ public struct RuntimeTopology: Sendable {
             machines.append(RuntimeMachine(id: "m:desktop", role: .desktop, name: "Desktop", address: desktopPeer.ipv4,
                                            state: desktopPeer.online ? .verified : .failed,
                                            detail: "\(desktopPeer.shortName) · \(desktopPeer.online ? "en línea" : "desconectado") · host operativo"))
+        } else {
+            // El PC existe aunque no se pueda medir: se dibuja como DESCONOCIDO, no se oculta.
+            machines.append(RuntimeMachine(id: "m:desktop", role: .desktop, name: "Desktop", address: nil, state: .unverified,
+                                           detail: tailnet.running ? "no aparece en la tailnet · host operativo" : "sin medir: Tailscale parado en este Mac · host operativo"))
         }
         for (index, phone) in tailnet.peers.filter({ !$0.isSelf && $0.os.lowercased() == "ios" }).prefix(2).enumerated() {
             machines.append(RuntimeMachine(id: "m:iphone\(index)", role: .iphone, name: "iPhone", address: phone.ipv4,
@@ -207,9 +213,9 @@ public struct RuntimeTopology: Sendable {
             links.append(RuntimeLink(from: machine.id, to: hub, transport: .tailscale, label: machine.address ?? "",
                                      state: tailnet.running ? machine.state : .unverified, warning: nil, provenanceOnly: false))
         }
-        if desktopPeer != nil {
-            links.append(RuntimeLink(from: "s:daemon", to: "m:desktop", transport: .observation, label: "sondas HTTPS",
-                                     state: snapshot.services.contains { $0.machine == .desktop && $0.alive } ? .verified : .unverified, warning: nil, provenanceOnly: false))
+        let desktopMeasured = services.contains { $0.host == .desktop && $0.kind == .service }
+        for external in services where external.host == .external && !desktopMeasured && external.id != "s:github@external" && external.id != "s:neon@external" {
+            links.append(RuntimeLink(from: "s:daemon", to: external.id, transport: .observation, label: "sonda", state: external.state, warning: nil, provenanceOnly: false))
         }
         func has(_ id: String) -> Bool { services.contains { $0.id == id } }
         let api = services.first { $0.host == .desktop && $0.id.hasPrefix("s:choisys-api") } ?? services.first { $0.id.hasPrefix("s:choisys-api") }
@@ -248,7 +254,10 @@ public struct RuntimeTopology: Sendable {
             links.append(RuntimeLink(from: "r:\(repo.name)", to: "s:github@external", transport: .source, label: repo.remoteVerified ? "remote" : "remote (declarado)",
                                      state: repo.remoteVerified ? .verified : .unverified, warning: nil, provenanceOnly: true))
         }
-        return RuntimeTopology(machines: machines, services: services, links: links, observedAt: snapshot.observedAt)
+        let notice: String? = !tailnet.running
+            ? "Tailscale está parado en este Mac: el PC, el iPhone y el Cubo no se pueden medir. Actívalo para ver la topología completa."
+            : (desktopPeer == nil ? "El PC no aparece en la tailnet." : nil)
+        return RuntimeTopology(machines: machines, services: services, links: links, observedAt: snapshot.observedAt, notice: notice)
     }
 
     public var repositories: [SourceRepository] {

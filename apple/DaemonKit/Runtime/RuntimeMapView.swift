@@ -60,7 +60,13 @@ public struct RuntimeMapView: View {
                         }
                     }
                 }
+                if !compact { laneHeadings(size) }
                 header
+                if let notice = topology.notice, !compact {
+                    Text("⚠ \(notice)").font(.system(size: 11)).foregroundStyle(DaemonPalette.amber)
+                        .padding(8).background(DaemonPalette.amber.opacity(0.08)).overlay(Rectangle().stroke(DaemonPalette.amber.opacity(0.4)))
+                        .frame(maxWidth: size.width * 0.7, alignment: .leading).position(x: size.width / 2, y: size.height - 58)
+                }
                 legend.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(12)
             }
         }
@@ -85,6 +91,15 @@ public struct RuntimeMapView: View {
         .padding(12)
     }
 
+    func laneHeadings(_ size: CGSize) -> some View {
+        ZStack {
+            ForEach([("ESTE MAC", 0.17), ("TAILNET", 0.40), ("PC · HOST OPERATIVO", 0.65), ("INTERNET", 0.92)], id: \.0) { item in
+                Text(item.0).font(.system(size: 9, design: .monospaced)).tracking(1.5).foregroundStyle(DaemonPalette.faint)
+                    .position(x: size.width * item.1, y: 78)
+            }
+        }
+    }
+
     var legend: some View {
         HStack(spacing: 12) {
             ForEach([Evidence.verified, .partial, .failed, .unverified], id: \.self) { state in
@@ -107,11 +122,11 @@ public struct RuntimeMapView: View {
         let unit = min(w, h)
         func at(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x * w, y: y * h) }
         // Anclas: el Desktop es el host operativo, más grande; el Mac es el observador.
-        if topology.machines.contains(where: { $0.id == "m:mac" }) { points.anchors["m:mac"] = Anchor(center: at(0.17, 0.55), radius: unit * 0.17) }
-        if topology.machines.contains(where: { $0.id == "m:desktop" }) { points.anchors["m:desktop"] = Anchor(center: at(0.62, 0.55), radius: unit * 0.25) }
+        if topology.machines.contains(where: { $0.id == "m:mac" }) { points.anchors["m:mac"] = Anchor(center: at(0.17, 0.52), radius: unit * 0.17) }
+        if topology.machines.contains(where: { $0.id == "m:desktop" }) { points.anchors["m:desktop"] = Anchor(center: at(0.65, 0.52), radius: unit * 0.31) }
         let phones = topology.machines.filter { $0.role == .iphone }
         for (index, phone) in phones.enumerated() { points.anchors[phone.id] = Anchor(center: at(0.38 + Double(index) * 0.08, 0.9), radius: unit * 0.05) }
-        points.nodes["n:tailnet"] = at(0.38, 0.6)
+        points.nodes["n:tailnet"] = at(0.40, 0.52)
         for (id, anchor) in points.anchors { points.nodes[id] = anchor.center }
         // Servicios dentro de su máquina, en anillo.
         for role in [MachineRole.mac, .desktop] {
@@ -121,7 +136,7 @@ public struct RuntimeMapView: View {
             for (index, service) in list.enumerated() {
                 if list.count == 1 { points.nodes[service.id] = anchor.center; continue }
                 let angle = -Double.pi / 2 + Double(index) / Double(list.count) * 2 * .pi
-                let r = anchor.radius * 0.55
+                let r = anchor.radius * 0.7
                 points.nodes[service.id] = CGPoint(x: anchor.center.x + cos(angle) * r, y: anchor.center.y + sin(angle) * r)
             }
         }
@@ -129,9 +144,9 @@ public struct RuntimeMapView: View {
         let externals = topology.services(on: .external)
         let column = externals.filter { $0.id != "s:github@external" }
         for (index, service) in column.enumerated() {
-            points.nodes[service.id] = at(0.92, 0.32 + Double(index) * 0.3)
+            points.nodes[service.id] = at(0.92, 0.38 + Double(index) * 0.26)
         }
-        if externals.contains(where: { $0.id == "s:github@external" }) { points.nodes["s:github@external"] = at(0.42, 0.1) }
+        if externals.contains(where: { $0.id == "s:github@external" }) { points.nodes["s:github@external"] = at(0.92, 0.2) }
         // Procedencia: fila de repos bajo GitHub.
         let repos = topology.repositories
         for (index, repo) in repos.enumerated() {
@@ -167,7 +182,7 @@ public struct RuntimeMapView: View {
             let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
             let dx = b.x - a.x, dy = b.y - a.y
             let length = max(hypot(dx, dy), 1)
-            let bend: CGFloat = link.provenanceOnly ? 0.08 : 0.16
+            let bend: CGFloat = link.provenanceOnly ? 0.04 : 0.05
             let control = CGPoint(x: mid.x - dy / length * length * bend, y: mid.y + dx / length * length * bend)
             var path = Path()
             path.move(to: a)
@@ -187,7 +202,11 @@ public struct RuntimeMapView: View {
             if !compact && !link.provenanceOnly && !link.label.isEmpty && link.transport != .tailscale || link.warning != nil {
                 let curveMid = CGPoint(x: 0.25 * a.x + 0.5 * control.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * control.y + 0.25 * b.y)
                 let text = (link.warning != nil ? "⚠ " : "") + (link.transport == .loopback || link.transport == .observation ? link.label : "\(link.transport.label) \(link.label)")
-                context.draw(Text(text).font(.system(size: 9, design: .monospaced)).foregroundColor(color), at: curveMid)
+                let resolved = context.resolve(Text(text).font(.system(size: 10, design: .monospaced)).foregroundColor(color))
+                let box = resolved.measure(in: CGSize(width: 400, height: 40))
+                context.fill(Path(roundedRect: CGRect(x: curveMid.x - box.width / 2 - 4, y: curveMid.y - box.height / 2 - 1, width: box.width + 8, height: box.height + 2), cornerRadius: 3),
+                             with: .color(Color.black.opacity(0.88)))
+                context.draw(resolved, at: curveMid)
             }
         }
     }
