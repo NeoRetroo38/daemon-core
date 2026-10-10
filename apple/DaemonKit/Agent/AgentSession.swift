@@ -26,6 +26,16 @@ public struct ChatMessage: Identifiable, Sendable {
     public var engine: String
     public var trace: [TraceStep] = []
     public var streaming = false
+    /// El LLM falló y la respuesta salió del router local: debe verse, nunca en silencio (#81).
+    public var fallback = false
+
+    /// Indicador por respuesta (#81): LOCAL · LLM · TOOLS. Nunca nombra al proveedor ni al modelo.
+    public var modeLabel: String {
+        var parts = [engine.isEmpty || engine == "local" ? "LOCAL" : "LLM"]
+        if tools.contains(where: { !$0.hasPrefix("llm:") }) { parts.append("TOOLS") }
+        if fallback { parts.append("LLM no disponible") }
+        return parts.joined(separator: " · ")
+    }
 
     public init(role: Role, text: String, blocks: [AgentBlock] = [], evidence: Evidence? = nil, tools: [String] = [],
                 pending: Bool = false, engine: String = "") {
@@ -168,7 +178,7 @@ public final class AgentSession: ObservableObject {
         if AgentKeychain.configured {
             setTrace(index) { trace in
                 trace[0].state = .done
-                trace.append(TraceStep(label: "Razonando con \(AgentSettings.model)", detail: "solo herramientas de lectura", state: .running))
+                trace.append(TraceStep(label: "Razonando", detail: "solo herramientas de lectura", state: .running))
             }
             let digest = await RepositoryIndex.shared.digest(for: context.repositories)
             let encoder = JSONEncoder()
@@ -176,14 +186,16 @@ public final class AgentSession: ObservableObject {
             let digestText = (try? encoder.encode(digest)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             let ecosystemText = context.ecosystem.map(Self.compact) ?? "sin observación"
             var outcome: ToolOutcome
+            var failed = false
             do {
                 outcome = try await ClaudeAgent.respond(to: question, history: history, context: context, digest: digestText, ecosystem: ecosystemText)
                 outcome.toolsUsed.insert("llm:\(AgentSettings.model)", at: 0)
             } catch {
+                failed = true
                 outcome = ToolOutcome(text: "No llego al modelo (\(error.localizedDescription)). Sigo en local: pregúntame algo concreto sobre repos, puertos, red, choisys o el Cubo.", evidence: .unverified)
             }
-            setTrace(index) { trace in if let last = trace.indices.last { trace[last].state = .done } }
-            await finish(index, question: question, tool: nil, outcome: outcome, history: history, alreadyPhrased: true)
+            setTrace(index) { trace in if let last = trace.indices.last { trace[last].state = failed ? .failed : .done } }
+            await finish(index, question: question, tool: nil, outcome: outcome, history: history, alreadyPhrased: true, fallback: failed)
             return
         }
         setTrace(index) { $0[0].state = .done }
@@ -193,13 +205,14 @@ public final class AgentSession: ObservableObject {
 
     /// Redacta y «escribe» la respuesta final.
     private func finish(_ index: Int, question: String, tool: String?, outcome: ToolOutcome, history: [(role: String, text: String)],
-                        proposal: ToolSpec? = nil, alreadyPhrased: Bool = false) async {
+                        proposal: ToolSpec? = nil, alreadyPhrased: Bool = false, fallback: Bool = false) async {
         guard messages.indices.contains(index) else { busy = false; return }
         messages[index].pending = false
         messages[index].streaming = true
         messages[index].evidence = proposal == nil ? outcome.evidence : nil
         messages[index].tools = outcome.toolsUsed
-        if !alreadyPhrased && AgentKeychain.configured && proposal == nil {
+        messages[index].fallback = fallback
+        if !alreadyPhrased && !fallback && AgentKeychain.configured && proposal == nil {
             // Voz del LLM sobre resultados medidos, en streaming real.
             messages[index].engine = AgentSettings.model
             do {
@@ -208,12 +221,14 @@ public final class AgentSession: ObservableObject {
                     messages[index].text += chunk
                 }
             } catch {
+                // Falla a mitad del stream: se rehace en local y se marca.
                 messages[index].text = ""
+                messages[index].fallback = true
             }
         }
         if messages[index].text.isEmpty {
             let full = alreadyPhrased ? outcome.text : DaemonVoice.compose(question: question, tool: tool, outcome: outcome, proposal: proposal)
-            messages[index].engine = alreadyPhrased ? AgentSettings.model : "local"
+            messages[index].engine = alreadyPhrased && !fallback ? AgentSettings.model : "local"
             await Typewriter.reveal(full) { [weak self] shown, _ in
                 guard let self, self.messages.indices.contains(index) else { return }
                 self.messages[index].text = shown
