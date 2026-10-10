@@ -377,6 +377,9 @@ public actor CubeTunnel {
         if active { return ToolOutcome(text: "El túnel ya está abierto (PID \(process?.processIdentifier ?? 0)).") }
         let ports = await PortProbe.listening()
         if let busy = ports.sockets.first(where: { $0.port == 8765 }) {
+            if busy.command.lowercased().hasPrefix("ssh") {
+                return ToolOutcome(text: "El túnel ya está levantado (ssh, PID \(busy.pid)), probablemente por Cube Link. No abro otro.", evidence: .verified)
+            }
             return ToolOutcome(text: "127.0.0.1:8765 ya está ocupado por \(busy.command) (PID \(busy.pid)). No abro otro túnel encima.", evidence: .partial)
         }
         let tailnet = await TailnetProbe.status()
@@ -387,8 +390,12 @@ public actor CubeTunnel {
             return ToolOutcome(text: "Falta el usuario SSH del Desktop. Añade \"desktopSSHUser\" en ~/Library/Application Support/Daemon/topology.json.", evidence: .unverified)
         }
         guard let ssh = Toolbox.locate("ssh") else { return ToolOutcome(text: "OpenSSH no encontrado.", evidence: .unverified) }
-        let arguments = ["-N", "-L", "127.0.0.1:8765:127.0.0.1:8765", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
-                         "-o", "ServerAliveInterval=30", "-o", "ConnectTimeout=8", "\(user)@\(ip)"]
+        // Misma clave que cube-link.command: la dedicada si existe.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dedicated = home + "/.ssh/id_ed25519_cubelink"
+        let key = FileManager.default.fileExists(atPath: dedicated) ? dedicated : home + "/.ssh/id_ed25519"
+        let arguments = ["-N", "-i", key, "-o", "IdentitiesOnly=yes", "-L", "127.0.0.1:8765:127.0.0.1:8765", "-o", "ExitOnForwardFailure=yes",
+                         "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "-o", "ConnectTimeout=8", "\(user)@\(ip)"]
         let decision = CommandRunner.policy(ssh, arguments, approval: .userConfirmed)
         guard decision.verdict == .allow else { return ToolOutcome(text: "El núcleo no permite este túnel: \(decision.reason).", evidence: .failed) }
         let process = Process()

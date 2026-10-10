@@ -29,7 +29,7 @@ Léelo entero antes de tocar nada. Después lee `AGENTS.md`, `docs/CONTROL_PLANE
 | Docs del ecosistema | iCloud `scenarys/daemon/` (copias de CONTROL_PLANE y AVANCES) | — |
 | Coordinación | GitHub `daemon-core`: issue **#10** (Mac ↔ Desktop), issue **#1** (prompt maestro) | igual |
 
-Topología medida: Mac `100.75.198.12`, Desktop `100.81.78.2` (MagicDNS `desktop-dgjsrgv.<tailnet>.ts.net`), iPhone en la tailnet.
+Topología medida: Mac, Desktop (MagicDNS `desktop-dgjsrgv.<tailnet>.ts.net`) e iPhone en la tailnet; las IPs, con `tailscale status` (no se publican: el repo es público).
 
 ## 4. Estado al cerrar esta sesión
 - **Fusionado en main (PR #9)**: gate de políticas C++ (C ABI 0.2.0), capa Control, 26 herramientas, mapa vivo, cubo 3D con el
