@@ -93,6 +93,7 @@ void observationToolCases() {
         {"/bin/ps", {"-o", "pid,%cpu,rss,etime", "-p", "12,34"}},
         {"/Applications/Tailscale.app/Contents/MacOS/Tailscale", {"status", "--json"}},
         {"tailscale", {"ip", "-4"}},
+        {"tailscale", {"ping", "-c", "1", "--timeout", "2s", "100.81.78.2"}},
         {"/opt/homebrew/bin/gh", {"pr", "list", "-R", "NeoRetroo38/daemon-core", "--state", "all", "--json", "number,title,state", "--limit", "20"}},
         {"gh", {"run", "list", "--repo", "NeoRetroo38/choisys", "--limit", "5", "--json", "status,conclusion"}},
         {"gh", {"auth", "status", "--hostname", "github.com"}},
@@ -140,6 +141,10 @@ void observationToolCases() {
     expect(standard, {"ssh", {"-N", "-L", "8765:127.0.0.1:8765", "neo@desktop"}}, PolicyVerdict::RequireApproval, "loopback tunnel needs network rule");
     expect(permissive, {"ssh", {"-N", "-L", "127.0.0.1:8765:127.0.0.1:8765", "neo@desktop"}}, PolicyVerdict::Allow, "loopback tunnel allowed with network rule");
     expect(permissive, {"tailscale", {"up"}}, PolicyVerdict::Allow, "tailscale mutation is network class under explicit rule");
+    require(standard.evaluate(StructuredCommand{"tailscale", {"ping", "-c", "1", "--timeout", "2s", "8.8.8.8"}}).classification == CommandClass::NETWORK,
+            "ping outside the tailnet is not a read");
+    require(standard.evaluate(StructuredCommand{"tailscale", {"ping", "-c", "1", "--timeout", "2s", "100.81.78.2x"}}).classification == CommandClass::NETWORK,
+            "malformed tailnet address is not a read");
     require(standard.evaluate(StructuredCommand{"tailscale", {"funnel", "8765"}}).classification == CommandClass::NETWORK, "funnel is network class");
 }
 
