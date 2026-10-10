@@ -48,9 +48,10 @@ function Invoke-DeployCommand([string]$Exe, [string[]]$Arguments, [string]$Direc
         return $output
     } finally { $process.Dispose() }
 }
-function Invoke-DeployStep($Config, [string]$ConfigPath, [string]$Repo, [string]$Phase, [string]$Release, [string]$Previous) {
+function Invoke-DeployStep($Config, [string]$ConfigPath, [string]$Repo, [string]$Phase, [string]$Release, [string]$Previous, [string]$Service = '') {
     $args = @('-NoProfile','-File',$Config.stepScript,'-ConfigPath',$ConfigPath,'-Repo',$Repo,
         '-Phase',$Phase,'-Release',$Release,'-Previous',$Previous)
+    if ($Service) { $args += @('-Service',$Service) }
     Invoke-DeployCommand $Config.powershell $args $Config.root @{} 1800 | Out-Null
 }
 function Test-DeployHealth([string]$Url, [int]$Expected, [int]$Seconds = 45) {
