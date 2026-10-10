@@ -4,7 +4,9 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/deploy-common.ps1"
 $c = Get-Content $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
 $id = if ($Service -eq 'cube') { 'neos-cube' } else { 'choisys' }
-$active = Get-Content (Join-Path $c.root "$id/active.json") -Raw | ConvertFrom-Json
+$activePath = Join-Path $c.root "$id/active-$Service.json"
+if (-not (Test-Path $activePath)) { $activePath = Join-Path $c.root "$id/active.json" }
+$active = Get-Content $activePath -Raw | ConvertFrom-Json
 $release = $active.release
 $environment = @{PATH="$(Split-Path $c.node);$env:PATH"}
 try {
