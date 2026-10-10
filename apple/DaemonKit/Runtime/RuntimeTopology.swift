@@ -228,6 +228,10 @@ public struct RuntimeTopology: Sendable {
             links.append(RuntimeLink(from: api.id, to: cube.id, transport: .loopback, label: "127.0.0.1:8765", state: cube.state == .failed ? .failed : .unverified,
                                      warning: cube.warning, provenanceOnly: false))
         }
+        // Túnel SSH del Mac al Cubo: el socket local está medido; el extremo remoto solo responde con Bearer.
+        if let cube, snapshot.tunnelActive {
+            links.append(RuntimeLink(from: "m:mac", to: cube.id, transport: .ssh, label: "túnel 127.0.0.1:8765", state: .partial, warning: nil, provenanceOnly: false))
+        }
         if let api, has("s:neon@external") {
             links.append(RuntimeLink(from: api.id, to: "s:neon@external", transport: .postgres, label: "Prisma", state: snapshot.neon?.evidence ?? .unverified, warning: nil, provenanceOnly: false))
         }
