@@ -150,7 +150,7 @@ struct MessageRow: View {
                     }
                     if !message.pending && !message.streaming {
                         HStack(spacing: 10) {
-                            Text(message.engine.isEmpty || message.engine == "local" ? "voz local · 0 tokens" : message.engine)
+                            Text(message.modeLabel)
                             Text(DaemonClock.relative(message.timestamp))
                         }
                         .font(DaemonFont.label).foregroundStyle(DaemonPalette.faint)
