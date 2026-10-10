@@ -282,7 +282,8 @@ struct BlockView: View {
         case .cube(let repository, let record):
             MetricCubePanel(runs: [CubeModel.run(record: record, repository: repository, liveServices: liveServices(repository.name))], height: 340)
         case .topology(let snapshot):
-            TopologyMapView(snapshot: snapshot, config: config, selection: $topologySelection, compact: false).frame(height: 360)
+            RuntimeMapView(topology: RuntimeTopology.build(snapshot, config: config), selection: $topologySelection,
+                           showProvenance: .constant(false), compact: true).frame(height: 340)
         case .tools(let tools):
             TechnologyTable(tools: tools)
         case .provenance(let provenance, let evidence):

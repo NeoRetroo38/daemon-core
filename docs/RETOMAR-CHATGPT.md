@@ -38,6 +38,11 @@ Topología medida: Mac `100.75.198.12`, Desktop `100.81.78.2` (MagicDNS `desktop
   plegables, markdown, burbujas, voz natural de Daemon `Agent/DaemonVoice.swift`, seguimiento «¿y daemon-core?», streaming SSE real
   si hay API key), arreglo del bloqueo del escaneo de repos (presupuesto de 10 s, conteo de líneas sobre bytes, escaneos compartidos),
   `scripts/cube-link.command` versionado. 28 tests Swift.
+- **Rama `claude/runtime-topology`** (encima de la anterior): el mapa vivo es **topología de ejecución**, no de archivos.
+  Modelo en `apple/DaemonKit/Runtime/` (`RuntimeTopology`, `RuntimeMapView`, `RuntimeInspector`). Regla: un repositorio no es un
+  nodo por existir en disco; solo se dibuja lo que corre (Daemon, listeners medidos del Mac, servicios del Desktop por Serve,
+  Cubo aislado con salud «desconocida», externos). Los repos son procedencia (`source`) y solo aparecen con
+  «Mostrar procedencia del código». Estados: VERIFICADO / DEGRADADO / NO DISPONIBLE / DESCONOCIDO.
 - **Pendiente**:
   1. Desktop: activar OpenSSH solo para la tailnet → `scripts/windows/enable-openssh-tailnet.ps1 -PublicKey "<clave del Mac>"`;
      luego en el Mac `~/Desktop/scenarys/cube-link.command` (pide el usuario de Windows y lo guarda en `topology.json`).

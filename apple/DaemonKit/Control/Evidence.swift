@@ -14,6 +14,16 @@ public enum Evidence: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// Estado de un nodo runtime en el mapa vivo.
+    public var runtimeLabel: String {
+        switch self {
+        case .verified: "VERIFICADO"
+        case .partial: "DEGRADADO"
+        case .failed: "NO DISPONIBLE"
+        case .unverified: "DESCONOCIDO"
+        }
+    }
+
     /// Combina evidencias: el conjunto vale lo que su eslabón más débil.
     public static func weakest(_ values: [Evidence]) -> Evidence {
         guard !values.isEmpty else { return .unverified }
