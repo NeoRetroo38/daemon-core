@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "daemon/policy.hpp"
 
 #include <algorithm>
@@ -201,6 +202,14 @@ bool systemRead(std::string_view program, const std::vector<std::string>& argume
     if (program == "tailscale") {
         if (arguments == std::vector<std::string>{"status", "--json"} || arguments == std::vector<std::string>{"version"} ||
             arguments == std::vector<std::string>{"ip", "-4"} || arguments == std::vector<std::string>{"ip"}) return true;
+        // Un ping de latencia a un nodo de la tailnet (100.64.0.0/10) es lectura; a cualquier otra IP, no.
+        if (arguments.size() == 6 && arguments[0] == "ping" && arguments[1] == "-c" && arguments[2] == "1" &&
+            arguments[3] == "--timeout" && arguments[4] == "2s") {
+            unsigned a = 0, b = 0, c = 0, d = 0;
+            char tail = 0;
+            if (std::sscanf(arguments[5].c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return false;
+            return a == 100 && b >= 64 && b <= 127 && c <= 255 && d <= 255;
+        }
         return false;
     }
     if (program == "gh") {

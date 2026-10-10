@@ -9,6 +9,8 @@ public struct TailnetPeer: Codable, Sendable, Hashable, Identifiable {
     public let active: Bool
     public let lastSeen: Date?
     public let isSelf: Bool
+    /// Ida y vuelta medida con `tailscale ping` (nil si no se midió).
+    public var latencyMs: Int? = nil
 
     public var id: String { dnsName.isEmpty ? hostName : dnsName }
     public var ipv4: String? { addresses.first { $0.contains(".") } }
@@ -38,6 +40,13 @@ public struct TailnetSnapshot: Codable, Sendable {
 }
 
 public enum TailnetParser {
+    /// «pong from desktop (100.x.y.z) via 192.168.1.5:41641 in 3ms» → 3. Acepta decimales («in 12.4ms» → 12).
+    public static func pingMilliseconds(_ output: String) -> Int? {
+        guard let range = output.range(of: #"in ([0-9]+(\.[0-9]+)?)ms"#, options: .regularExpression) else { return nil }
+        let number = output[range].dropFirst(3).dropLast(2)
+        return Double(number).map { Int($0.rounded()) }
+    }
+
     /// Parsea `tailscale status --json`. Solo conserva nombre, SO, IPs y
     /// presencia; claves, IDs de nodo y datos de cuenta se descartan.
     public static func status(_ data: Data, observedAt: Date = Date()) -> TailnetSnapshot? {
@@ -74,13 +83,31 @@ public enum TailnetParser {
 
 #if os(macOS)
 public enum TailnetProbe {
+    /// Un ping por nodo en línea, en paralelo y con tope de 2 s: da los ms reales de cada enlace de la tailnet.
+    static func withPings(_ snapshot: TailnetSnapshot) async -> TailnetSnapshot {
+        let peers = await withTaskGroup(of: (Int, Int?).self) { group in
+            for (index, peer) in snapshot.peers.enumerated() where !peer.isSelf && peer.online {
+                guard let ip = peer.ipv4 else { continue }
+                group.addTask {
+                    let result = try? await CommandRunner.run("tailscale", ["ping", "-c", "1", "--timeout", "2s", ip], timeout: 4)
+                    return (index, result.flatMap { TailnetParser.pingMilliseconds($0.standardOutput) })
+                }
+            }
+            var measured = snapshot.peers
+            for await (index, ms) in group { measured[index].latencyMs = ms }
+            return measured
+        }
+        return TailnetSnapshot(backendState: snapshot.backendState, tailnetName: snapshot.tailnetName, peers: peers,
+                               evidence: snapshot.evidence, provenance: snapshot.provenance, error: snapshot.error)
+    }
+
     public static func status() async -> TailnetSnapshot {
         do {
             let result = try await CommandRunner.run("tailscale", ["status", "--json"], timeout: 6)
             guard let snapshot = TailnetParser.status(Data(result.standardOutput.utf8)) else {
                 return .unavailable(result.succeeded ? "Respuesta de Tailscale no reconocida" : "Tailscale no responde (código \(result.exitCode))")
             }
-            return snapshot
+            return await withPings(snapshot)
         } catch {
             return .unavailable(error.localizedDescription)
         }

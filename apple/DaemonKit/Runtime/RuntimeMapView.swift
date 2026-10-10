@@ -156,7 +156,8 @@ public struct RuntimeMapView: View {
         links.append(link(Self.github, Self.internet, .https, Self.ms(github?.latencyMs), github?.state ?? .unverified))
         links.append(link(Self.internet, Self.tailnet, .internet, "", .unverified))
         for machine in topology.machines {
-            let label = machine.role == .desktop ? Self.ms(desktopLatency) : ""
+            // Ping real de la tailnet; si no hay, para el Desktop vale la latencia a sus servicios por la tailnet.
+            let label = Self.ms(machine.latencyMs ?? (machine.role == .desktop ? desktopLatency : nil))
             links.append(link(machine.id, Self.tailnet, .tailscale, label, machine.state == .verified ? .verified : machine.state))
             if machine.role != .iphone {
                 // Salida a internet: la deducimos de las sondas que sí responden, no se mide el salto.
