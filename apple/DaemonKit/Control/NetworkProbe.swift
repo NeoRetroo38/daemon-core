@@ -9,6 +9,14 @@ public struct ProbeResult: Codable, Sendable, Hashable {
     public let evidence: Evidence
     public let detail: String
     public let provenance: Provenance
+    /// Cabecera `Server` de la respuesta (p. ej. «GitHub.com» delata GitHub Pages).
+    public var server: String? = nil
+
+    public init(target: String, reachable: Bool, statusCode: Int?, latencyMs: Int?, evidence: Evidence, detail: String,
+                provenance: Provenance, server: String? = nil) {
+        self.target = target; self.reachable = reachable; self.statusCode = statusCode; self.latencyMs = latencyMs
+        self.evidence = evidence; self.detail = detail; self.provenance = provenance; self.server = server
+    }
 
     public var summary: String {
         guard reachable else { return detail }
@@ -46,8 +54,10 @@ public enum NetworkProbe {
             // 401/403 demuestran que el servicio vive y exige autenticación.
             let evidence: Evidence = (200..<400).contains(code) || code == 401 || code == 403 ? .verified : (code >= 500 ? .failed : .partial)
             let detail = code == 401 || code == 403 ? "vivo · exige autenticación" : (code < 400 ? "responde" : "responde con error")
-            return ProbeResult(target: url.absoluteString, reachable: true, statusCode: code, latencyMs: elapsed, evidence: evidence,
-                               detail: detail, provenance: Provenance(source: url.host ?? "?", method: "\(method) \(url.path.isEmpty ? "/" : url.path)", observedAt: started))
+            var result = ProbeResult(target: url.absoluteString, reachable: true, statusCode: code, latencyMs: elapsed, evidence: evidence,
+                                     detail: detail, provenance: Provenance(source: url.host ?? "?", method: "\(method) \(url.path.isEmpty ? "/" : url.path)", observedAt: started))
+            result.server = http.value(forHTTPHeaderField: "Server")
+            return result
         } catch {
             let nsError = error as NSError
             let reason: String

@@ -35,6 +35,8 @@ final class DaemonAppModel: ObservableObject {
     @Published var interval: Double = 20
     @Published private(set) var latencyTrace: [Int] = []
     @Published private(set) var observations = 0
+    /// Procedencia verificada con git (nombre de repo → copia local + remoto).
+    @Published private(set) var sources: [String: SourceRepository] = [:]
     let config = TopologyConfig.load()
     private(set) var session: AgentSession!
     private(set) var clod: ClodSession!
@@ -97,9 +99,15 @@ final class DaemonAppModel: ObservableObject {
         do {
             snapshot = try await Task.detached(priority: .userInitiated) { try CoreBridge.snapshot(repositoryPaths: paths) }.value
             if let repositories = snapshot?.repositories {
-                Task.detached(priority: .utility) {
-                    for repository in repositories where repository.evidence == .verified { _ = await RepositoryIndex.shared.record(for: repository) }
+                Task { [weak self] in
+                    var found: [String: SourceRepository] = [:]
+                    for repository in repositories where repository.evidence == .verified {
+                        let record = await RepositoryIndex.shared.record(for: repository)
+                        found[repository.name] = SourceRepository(name: repository.name, localPath: repository.path,
+                                                                  remote: record.git.remoteSlug.map { "github.com/\($0)" }, remoteVerified: record.git.remoteSlug != nil)
+                    }
                     _ = await RepositoryIndex.shared.digest(for: repositories)
+                    self?.sources = found
                 }
             }
         } catch {
@@ -297,6 +305,7 @@ struct OverviewView: View {
     @ObservedObject var model: DaemonAppModel
     let session: AgentSession
     @Binding var selection: String?
+    @State private var showProvenance = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -306,11 +315,12 @@ struct OverviewView: View {
                     .buttonStyle(.plain).font(DaemonFont.label).tracking(1).foregroundStyle(DaemonPalette.green).disabled(model.observing)
             }
             if let ecosystem = model.ecosystem {
+                let topology = RuntimeTopology.build(ecosystem, config: model.config, catalog: model.repositories, sources: model.sources)
                 HStack(alignment: .top, spacing: 14) {
-                    TopologyMapView(snapshot: ecosystem, config: model.config, selection: $selection).frame(height: 520)
+                    RuntimeMapView(topology: topology, selection: $selection, showProvenance: $showProvenance).frame(height: 540)
                         .overlay(Scanlines(opacity: 0.04)).cornerBrackets()
-                    if let selection, let node = TopologyLayout.build(ecosystem, config: model.config).nodes.first(where: { $0.id == selection }) {
-                        TopologyInspector(node: node).frame(width: 280)
+                    if let selection, topology.service(selection) != nil || topology.machines.contains(where: { $0.id == selection }) {
+                        RuntimeInspector(topology: topology, id: selection).frame(width: 300)
                     }
                 }
                 if !ecosystem.alerts.isEmpty { AlertList(alerts: ecosystem.alerts) }

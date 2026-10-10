@@ -188,17 +188,40 @@ final class ControlPlaneTests: XCTestCase {
         XCTAssertEqual(Set(names), ["choisys", "daemon-core"])
     }
 
-    func testTopologyLayoutKeepsUnverifiedHonest() {
-        let tailnet = TailnetSnapshot.unavailable("sin Tailscale")
-        let definition = TopologyConfig.standard.service("neo-cube")!
-        let status = ServiceStatus(definition: definition, machine: .mac, endpoint: "127.0.0.1:8765", probe: nil, listener: nil, stats: .empty, note: "sin listener")
-        let snapshot = EcosystemSnapshot(observedAt: Date(), machine: nil, ports: [], portsEvidence: .verified, tailnet: tailnet, services: [status], neon: nil,
+    func testRuntimeTopologyDrawsRunningComponentsNotFolders() {
+        let tailnetJSON = #"{"BackendState":"Running","Self":{"HostName":"MacBook","DNSName":"macbook.t.ts.net.","OS":"macOS","TailscaleIPs":["100.1.1.1"],"Online":true},"Peer":{"k":{"HostName":"DESKTOP-DGJSRGV","DNSName":"desktop-dgjsrgv.t.ts.net.","OS":"windows","TailscaleIPs":["100.2.2.2"],"Online":true}}}"#
+        let tailnet = TailnetParser.status(Data(tailnetJSON.utf8))!
+        let config = TopologyConfig.standard
+        let ok = ProbeResult(target: "https://desktop-dgjsrgv.t.ts.net:8443/health", reachable: true, statusCode: 200, latencyMs: 40, evidence: .verified,
+                             detail: "responde", provenance: Provenance(source: "t", method: "GET"))
+        let closed = ProbeResult(target: "100.2.2.2:8765", reachable: false, statusCode: nil, latencyMs: nil, evidence: .partial,
+                                 detail: "no expuesto", provenance: Provenance(source: "t", method: "TCP"))
+        let services = [
+            ServiceStatus(definition: config.service("choisys-api")!, machine: .mac, endpoint: "127.0.0.1:3000", probe: nil, listener: nil, stats: .empty, note: "sin listener"),
+            ServiceStatus(definition: config.service("neo-cube")!, machine: .mac, endpoint: "127.0.0.1:8765", probe: nil, listener: nil, stats: .empty, note: "sin listener"),
+            ServiceStatus(definition: config.service("choisys-api")!, machine: .desktop, endpoint: ok.target, probe: ok, listener: nil, stats: .empty, note: "también abierto directo en :3000 por la tailnet"),
+            ServiceStatus(definition: config.service("neo-cube")!, machine: .desktop, endpoint: "100.2.2.2:8765", probe: closed, listener: nil, stats: .empty, note: nil),
+        ]
+        let snapshot = EcosystemSnapshot(observedAt: Date(), machine: nil, ports: [], portsEvidence: .verified, tailnet: tailnet, services: services, neon: nil,
                                          cubeExposure: ExposureVerdict(status: "SAFE", reason: "ENGINE_PORT_NOT_LISTENING"), tunnelActive: false, alerts: [], durationMs: 1)
-        let layout = TopologyLayout.build(snapshot, config: .standard)
-        XCTAssertEqual(layout.nodes.first { $0.id == "m:desktop" }?.evidence, .unverified)
-        XCTAssertEqual(layout.nodes.first { $0.id.hasPrefix("s:neo-cube") }?.evidence, .unverified)
-        XCTAssertEqual(snapshot.productPath.first { $0.id == "neon" }?.evidence, .unverified)
+        let topology = RuntimeTopology.build(snapshot, config: config)
+        // El Mac no tiene listeners: solo corre Daemon; ni API ni Cubo aparecen ahí.
+        XCTAssertEqual(topology.services(on: .mac).map(\.name), ["Daemon"])
+        // El Desktop es el host operativo: API verificada con warning de exposición directa y Cubo aislado.
+        let api = topology.services(on: .desktop).first { $0.name == "choisys API" }
+        XCTAssertEqual(api?.state, .verified)
+        XCTAssertNotNil(api?.warning)
+        let cube = topology.services(on: .desktop).first { $0.kind == .engine }
+        XCTAssertEqual(cube?.state, .unverified, "salud del Cubo desconocida, nunca inventada")
+        XCTAssertEqual(cube?.bind, "127.0.0.1")
+        // Los repos no son nodos: solo enlaces de procedencia ocultos por defecto.
+        XCTAssertFalse(topology.services.contains { $0.id.hasPrefix("r:") })
+        XCTAssertTrue(topology.links.filter { $0.to.hasPrefix("r:") }.allSatisfy(\.provenanceOnly))
+        XCTAssertTrue(topology.links.contains { $0.warning != nil && $0.transport == .tailscale })
+        XCTAssertEqual(api?.source?.name, "choisys")
+        XCTAssertEqual(Evidence.partial.runtimeLabel, "DEGRADADO")
     }
+
 }
 
 final class ConversationTests: XCTestCase {
